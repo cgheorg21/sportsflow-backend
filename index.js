@@ -7,7 +7,7 @@ const cheerio = require("cheerio");
 const app = express();
 app.use(cors());
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 const FEEDS = [
   { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
@@ -415,5 +415,5 @@ if ((!image || image.length < 10) && link) {
 }
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on ${PORT}`);
 });
