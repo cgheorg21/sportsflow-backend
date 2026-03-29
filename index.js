@@ -9,16 +9,53 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-const FEEDS = [
-  { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
-  { url: "https://www.sdna.gr/rss.xml", source: "SDNA" },
-  { url: "https://sportday.gr/feed", source: "Sportday" },
-  { url: "https://www.to10.gr/feed", source: "To10" },
-  { url: "https://www.athletiko.gr/feed", source: "Athletiko" },
-  { url: "https://www.novasports.gr/rss", source: "Novasports" }
-];
+// =======================
+// 🔥 TEAM + CATEGORY DETECTION
+// =======================
+const teamKeywords = {
+  PAOK: ["παοκ", "δικεφαλ", "τουμπ", "ασπρομαυρ", "thessaloniki"],
+  OLYMPIACOS: ["ολυμπιακ", "osfp", "πειραι", "ερυθρολευκ", "θρυλο", "λιμανι"],
+  PANATHINAIKOS: ["παναθην", "παο", "τριφυλλ", "πρασιν", "λεωφορ"],
+  AEK: ["αεκ", "ενωση", "δικεφαλ", "φιλαδελφ", "κιτρινομαυρ"],
+  ARIS: ["αρη", "κιτριν", "βικελιδ", "super 3"],
+  OFI: ["οφη", "ηρακλειο", "κρητ", "γεντι κουλε"],
+  VOLOS: ["βολο", "μαγνησια", "πανθεσσαλικ"],
+  LEVADIAKOS: ["λεβαδ", "λιβαδ", "βοιωτ"],
+  ATROMITOS: ["ατρομη", "περιστερ", "κυανολευκ"],
+  KIFISIA: ["κηφισ", "ζηρινει", "βορεια προαστια"],
+  PANETOLIKOS: ["παναιτωλ", "αγριν", "τιτορμ"],
+  AEL: ["αελ", "λαρισ", "βυσσιν", "καμπου"],
+  PANSERRAIKOS: ["πανσερ", "σερρ", "λιονταρ"],
+  ASTERAS: ["αστερα", "αρκαδ", "κολοκοτρων"],
+  KALAMATA: ["καλαματ", "μαυρη θυελλα", "μεσσην"],
+  IRAKLIS: ["ηρακλ", "γηραι", "καυτανζογλει"]
+};
 
+function detectTeam(text) {
+  text = text.toLowerCase();
+  for (const team in teamKeywords) {
+    if (teamKeywords[team].some(k => text.includes(k))) {
+      return team;
+    }
+  }
+  return null;
+}
+
+function detectCategory(text) {
+  text = text.toLowerCase();
+
+  if (["μπασκετ", "basket", "nba", "euroleague"].some(k => text.includes(k)))
+    return "basket";
+
+  if (["ποδοσφ", "football", "super league", "uefa"].some(k => text.includes(k)))
+    return "football";
+
+  return "other";
+}
+
+// =======================
 // 🔥 IMAGE
+// =======================
 function extractImage(item) {
   const description = item.description?.[0] || "";
   const content = item["content:encoded"]?.[0] || "";
@@ -38,131 +75,119 @@ function extractImage(item) {
   return "";
 }
 
+// =======================
+// 🔥 FEEDS
+// =======================
+const FEEDS = [
+  { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
+  { url: "https://www.sdna.gr/rss.xml", source: "SDNA" },
+  { url: "https://sportday.gr/feed", source: "Sportday" },
+  { url: "https://www.to10.gr/feed", source: "To10" },
+  { url: "https://www.athletiko.gr/feed", source: "Athletiko" },
+  { url: "https://www.novasports.gr/rss", source: "Novasports" }
+];
+
+// =======================
+// 🔥 MAIN ROUTE
+// =======================
 app.get("/articles", async (req, res) => {
   try {
+
+    // ⚡ ΠΑΡΑΛΛΗΛΑ (BIG SPEED BOOST)
+    const feedPromises = FEEDS.map(feed =>
+      axios.get(feed.url, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeout: 5000
+      })
+      .then(res => ({ data: res.data, source: feed.source }))
+      .catch(() => null)
+    );
+
+    const feedResponses = await Promise.all(feedPromises);
+
     let allArticles = [];
 
-    // =========================
-    // 🔥 RSS (SAFE VERSION)
-    // =========================
-    for (const feed of FEEDS) {
+    for (const feed of feedResponses) {
+      if (!feed) continue;
+
       try {
-        const response = await axios.get(feed.url, {
-          headers: { "User-Agent": "Mozilla/5.0" },
-          timeout: 5000
-        });
+        const result = await xml2js.parseStringPromise(feed.data);
+        let items = result?.rss?.channel?.[0]?.item || [];
 
-        const result = await xml2js.parseStringPromise(response.data);
-
-        let items = [];
-
-        if (feed.source === "SDNA") {
-        items = result.rss?.channel?.[0]?.item || [];
-        } else {
-        items = result.rss?.channel?.[0]?.item || [];
-        }
-
-        items = items.slice(0, 50);
-
-        // normal RSS
-        if (result?.rss?.channel?.[0]?.item) {
-          items = result.rss.channel[0].item;
-        }
-
-        // SDNA fallback
-        else if (result?.feed?.entry) {
-          items = result.feed.entry;
-        }
-
-        if (!items || items.length === 0) {
-          console.log("No items:", feed.url);
-          continue;
-        }
-
-        items = items.slice(0, 50);
+        items = items.slice(0, 40);
 
         const articles = items.map(item => {
 
-          let title = "";
-          if (typeof item.title?.[0] === "object") {
-            title = item.title[0]._ || "";
-          } else {
-            title = item.title?.[0] || "";
-          }
+          const title =
+            typeof item.title?.[0] === "object"
+              ? item.title[0]._ || ""
+              : item.title?.[0] || "";
 
-          let link = "";
-          if (item.link?.[0]?.$?.href) {
-            link = item.link[0].$.href;
-          } else {
-            link = item.link?.[0] || "";
-          }
+          const link =
+            item.link?.[0]?.$?.href ||
+            item.link?.[0] ||
+            "";
+
+          const text = title + link;
 
           return {
             title,
-            description: item.description?.[0] || "",
             link,
             pubDate: item.pubDate?.[0] || new Date().toISOString(),
             image: extractImage(item),
-            source: feed.source
+            source: feed.source,
+            team: detectTeam(text),
+            category: detectCategory(text)
           };
         });
 
         allArticles = allArticles.concat(articles);
 
-      } catch (err) {
-        console.log("Error with feed:", feed.url);
-      }
+      } catch (e) {}
     }
 
-    // =========================
-    // 🔥 SCRAPING
-    // =========================
-    const sport24Articles = await fetchSport24();
-    const sportFMArticles = await fetchSportFM();
-    const sdnaArticles = await fetchSDNA();
+    // =======================
+    // 🔥 SCRAPING (ΠΑΡΑΛΛΗΛΑ)
+    // =======================
+    const [sport24, sportfm, sdna] = await Promise.all([
+      fetchSport24(),
+      fetchSportFM(),
+      fetchSDNA()
+    ]);
 
-    allArticles = allArticles.concat(
-    sport24Articles,
-    sportFMArticles,
-    sdnaArticles
-    );
+    allArticles = allArticles.concat(sport24, sportfm, sdna);
 
-    // =========================
-    // 🔥 LIMIT PER SOURCE
-    // =========================
-    const limitPerSource = 20;
-    const grouped = {};
-
-    allArticles.forEach(article => {
-      if (!grouped[article.source]) {
-        grouped[article.source] = [];
-      }
-      if (grouped[article.source].length < limitPerSource) {
-        grouped[article.source].push(article);
-      }
-    });
-
-    allArticles = Object.values(grouped).flat();
-
-    // =========================
+    // =======================
     // 🔥 CLEAN
-    // =========================
+    // =======================
     allArticles = allArticles.filter(a =>
       a.title &&
       a.title.length > 20 &&
-      a.title.split(" ").length > 4 &&
       a.link &&
       a.link.startsWith("http")
     );
 
-    // =========================
+    // =======================
+    // 🔥 DEDUP (BY LINK)
+    // =======================
+    const map = new Map();
+
+    allArticles.forEach(a => {
+      if (!map.has(a.link)) {
+        map.set(a.link, a);
+      }
+    });
+
+    allArticles = Array.from(map.values());
+
+    // =======================
     // 🔥 SORT
-    // =========================
+    // =======================
     allArticles.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
     res.json(allArticles);
 
-  } catch (error) {
+  } catch (err) {
     res.status(500).json({ error: "Error fetching articles" });
   }
 });
@@ -172,244 +197,108 @@ app.get("/articles", async (req, res) => {
 // =======================
 async function fetchSport24() {
   try {
-    const response = await axios.get("https://www.sport24.gr/", {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
-
+    const response = await axios.get("https://www.sport24.gr/");
     const $ = cheerio.load(response.data);
 
     let articles = [];
 
     $("article").each((i, el) => {
-
       const link = $(el).find("a").first().attr("href");
-
       let title = $(el).find("h2").first().text().trim();
 
-      if (!title) {
-        title = $(el).find("h3").first().text().trim();
-      }
+      if (!title) title = $(el).find("h3").first().text().trim();
+      if (!title || title.length < 20) return;
 
-      if (title.includes("\n")) {
-        title = title.split("\n")[0];
-      }
+      const text = title + link;
 
-      // ❗ κόψε μικρά / λάθος titles
-      if (!title || title.split(" ").length < 5) return;
-
-      const image =
-        $(el).find("img").attr("src") ||
-        $(el).find("img").attr("data-src") ||
-        "";
-
-      if (link) {
-        articles.push({
-          title,
-          link: link.startsWith("http")
-            ? link
-            : `https://www.sport24.gr${link}`,
-          image,
-          pubDate: new Date().toISOString(),
-          source: "Sport24"
-        });
-      }
+      articles.push({
+        title,
+        link: link.startsWith("http") ? link : `https://www.sport24.gr${link}`,
+        image: $(el).find("img").attr("src") || "",
+        pubDate: new Date().toISOString(),
+        source: "Sport24",
+        team: detectTeam(text),
+        category: detectCategory(text)
+      });
     });
 
-    // 🔥 REMOVE DUPLICATES
-    articles = articles.filter((a, index, self) =>
-      index === self.findIndex(t => t.title === a.title)
-    );
+    return articles.slice(0, 40);
 
-    return articles.slice(0, 50);
-
-  } catch (err) {
-    console.log("Sport24 error");
+  } catch {
     return [];
   }
 }
 
 // =======================
-// 🔥 SPORT-FM (WORKING)
+// 🔥 SPORTFM
 // =======================
 async function fetchSportFM() {
   try {
-    const response = await axios.get("https://www.sport-fm.gr/rss/news", {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "application/rss+xml"
-      }
-    });
-
+    const response = await axios.get("https://www.sport-fm.gr/rss/news");
     const result = await xml2js.parseStringPromise(response.data);
     const items = result?.rss?.channel?.[0]?.item || [];
 
-    function extractId(link) {
-      const match = link?.match(/article\/(\d+)/);
-      return match ? match[1] : null;
-    }
-
-    const seen = new Set();
-    let articles = [];
-
-    for (const item of items.slice(0, 30)) {
-
-      const link = item.link?.[0] || "";
-      const id = extractId(link);
-
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-
+    return items.slice(0, 30).map(item => {
       let title = item.title?.[0] || "";
 
-      // 🔥 FIX |||
       if (title.includes("|||")) {
         const parts = title.split("|||").map(p => p.trim());
         title = parts.reduce((a, b) => (a.length > b.length ? a : b));
       }
 
-      title = title.replace(/\s+/g, " ").trim();
+      const link = item.link?.[0] || "";
+      const text = title + link;
 
-      // 🔥 IMAGE από RSS
-      let image =
-        item["media:thumbnail"]?.[0]?.$.url ||
-        item.enclosure?.[0]?.$.url ||
-        "";
-
-      // 🔥 FALLBACK → ΠΑΡΕ ΑΠΟ ΤΟ ΑΡΘΡΟ
-      if (!image || image.length < 10) {
-        try {
-          const articlePage = await axios.get(link, {
-            headers: { "User-Agent": "Mozilla/5.0" }
-          });
-
-          const $ = cheerio.load(articlePage.data);
-
-          image =
-            $("meta[property='og:image']").attr("content") ||
-            $("meta[name='twitter:image']").attr("content") ||
-            "";
-
-        } catch (e) {
-          console.log("Image fetch failed:", link);
-        }
-      }
-
-      articles.push({
+      return {
         title,
         link,
-        image,
+        image: item["media:thumbnail"]?.[0]?.$.url || "",
         pubDate: item.pubDate?.[0] || new Date().toISOString(),
-        source: "SportFM"
-      });
-    }
+        source: "SportFM",
+        team: detectTeam(text),
+        category: detectCategory(text)
+      };
+    });
 
-    return articles;
-
-  } catch (err) {
-    console.log("SportFM error", err.message);
+  } catch {
     return [];
   }
 }
-//SDNA
+
+// =======================
+// 🔥 SDNA
+// =======================
 async function fetchSDNA() {
   try {
-    const response = await axios.get("https://www.sdna.gr/", {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
-
+    const response = await axios.get("https://www.sdna.gr/");
     const $ = cheerio.load(response.data);
+
     let articles = [];
 
-    const links = $("a").toArray();
+    $("a").each((i, el) => {
+      let title = $(el).text().trim();
+      const link = $(el).attr("href");
 
-for (const el of links) {
+      if (!title || title.length < 25) return;
 
-  let title = $(el).text().trim();
-  const link = $(el).attr("href");
+      const text = title + link;
 
-  title = title.replace(/\s+/g, " ");
-
-  if (
-    !title ||
-    title.length < 25 ||
-    title.includes("LIVE") ||
-    title.includes("BC") ||
-    title.includes("Stoiximan") ||
-    title.includes("getScore") ||
-    title.match(/^\d+$/)
-  ) continue;
-
-  let image =
-  $(el).find("img").attr("src") ||
-  $(el).find("img").attr("data-src") ||
-  $(el).find("img").attr("data-original") ||
-  $(el).closest("article").find("img").attr("src") ||
-  $(el).closest("article").find("img").attr("data-src") ||
-  $(el).closest("article").find("img").attr("data-original") ||
-  "";
-
-if (image && image.startsWith("data")) {
-  image = "";
-}
-
-const srcset = $(el).find("img").attr("srcset");
-if ((!image || image.length < 10) && srcset) {
-  image = srcset.split(",")[0].split(" ")[0];
-}
-
-// 👉 FIX PATH
-if (image && image.startsWith("/")) {
-  image = "https://www.sdna.gr" + image;
-}
-
-// fallback στο άρθρο
-if ((!image || image.length < 10) && link) {
-  try {
-    const articlePage = await axios.get(
-      link.startsWith("http")
-        ? link
-        : `https://www.sdna.gr${link}`,
-      { headers: { "User-Agent": "Mozilla/5.0" } }
-    );
-
-    const $$ = cheerio.load(articlePage.data);
-
-    image =
-      $$("meta[property='og:image']").attr("content") ||
-      $$("img").first().attr("src") ||
-      "";
-
-  } catch (e) {}
-}
-
-  if (
-    link &&
-    (
-      link.includes("/podosfairo/") ||
-      link.includes("/mpasket/")
-    )
-  ) {
-    articles.push({
-      title,
-      link: link.startsWith("http")
-        ? link
-        : `https://www.sdna.gr${link}`,
-      image,
-      pubDate: new Date().toISOString(),
-      source: "SDNA"
+      if (link && link.includes("/podosfairo/")) {
+        articles.push({
+          title,
+          link: link.startsWith("http") ? link : `https://www.sdna.gr${link}`,
+          image: "",
+          pubDate: new Date().toISOString(),
+          source: "SDNA",
+          team: detectTeam(text),
+          category: detectCategory(text)
+        });
+      }
     });
-  }
-};
-
-    // dedup
-    articles = articles.filter((a, i, self) =>
-      i === self.findIndex(t => t.title === a.title)
-    );
 
     return articles.slice(0, 25);
 
-  } catch (err) {
-    console.log("SDNA error", err.message);
+  } catch {
     return [];
   }
 }
