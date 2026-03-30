@@ -11,7 +11,7 @@ app.use(cors());
 const PORT = process.env.PORT || 3000;
 
 // =======================
-//  DB
+// 🔥 DB
 // =======================
 mongoose.connect(process.env.MONGO_URI, {
   serverSelectionTimeoutMS: 10000
@@ -20,7 +20,7 @@ mongoose.connect(process.env.MONGO_URI, {
 .catch(err => console.log(err));
 
 // =======================
-//  MODEL
+// 🔥 MODEL
 // =======================
 const ArticleSchema = new mongoose.Schema({
   title: String,
@@ -35,25 +35,25 @@ const ArticleSchema = new mongoose.Schema({
 const Article = mongoose.model("Article", ArticleSchema);
 
 // =======================
-//  KEYWORDS
+// 🔥 DETECTION
 // =======================
 const teamKeywords = {
-  PAOK: ["παοκ","τουμπ","δικεφαλ","ασπρομαυρ"],
-  OLYMPIACOS: ["ολυμπιακ","osfp","πειραι","ερυθρολευκ"],
-  PANATHINAIKOS: ["παναθην","παο","τριφυλλ"],
-  AEK: ["αεκ","ενωση"],
-  ARIS: ["αρη","κιτριν"],
-  OFI: ["οφη"],
-  VOLOS: ["βολο"],
-  LEVADIAKOS: ["λεβαδ"],
-  ATROMITOS: ["ατρομη"],
-  KIFISIA: ["κηφισ"],
-  PANETOLIKOS: ["παναιτωλ"],
-  AEL: ["αελ","λαρισ"],
-  PANSERRAIKOS: ["πανσερ"],
-  ASTERAS: ["αστερα"],
-  KALAMATA: ["καλαματ"],
-  IRAKLIS: ["ηρακλ"]
+  PAOK:["παοκ","τουμπ","δικεφαλ"],
+  OLYMPIACOS:["ολυμπιακ","osfp","πειραι"],
+  PANATHINAIKOS:["παναθην","παο"],
+  AEK:["αεκ","ενωση"],
+  ARIS:["αρη"],
+  OFI:["οφη"],
+  VOLOS:["βολο"],
+  LEVADIAKOS:["λεβαδ"],
+  ATROMITOS:["ατρομη"],
+  KIFISIA:["κηφισ"],
+  PANETOLIKOS:["παναιτωλ"],
+  AEL:["αελ"],
+  PANSERRAIKOS:["πανσερ"],
+  ASTERAS:["αστερα"],
+  KALAMATA:["καλαματ"],
+  IRAKLIS:["ηρακλ"]
 };
 
 function detectTeam(text) {
@@ -67,14 +67,14 @@ function detectTeam(text) {
 function detectCategory(text) {
   text = text.toLowerCase();
 
-  if (["nba","euroleague","μπασκετ","fiba"].some(k => text.includes(k))) return "basket";
-  if (["ποδοσφ","football","uefa","champions league","super league"].some(k => text.includes(k))) return "football";
+  if (["nba","euroleague","μπασκετ"].some(k => text.includes(k))) return "basket";
+  if (["ποδοσφ","football","uefa","super league"].some(k => text.includes(k))) return "football";
 
   return "other";
 }
 
 // =======================
-//  IMAGE
+// 🔥 IMAGE
 // =======================
 function extractImage(item) {
   if (item["media:content"]?.[0]?.$?.url) return item["media:content"][0].$.url;
@@ -86,7 +86,7 @@ function extractImage(item) {
 }
 
 // =======================
-//  RSS
+// 🔥 RSS
 // =======================
 const FEEDS = [
   { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
@@ -141,49 +141,76 @@ async function fetchRSS() {
 }
 
 // =======================
-//  SPORT24 DEEP
+// 🔥 GENERIC SCRAPER
 // =======================
-async function fetchSport24() {
-  const urls = [
-    "https://www.sport24.gr/",
-    "https://www.sport24.gr/podosfairo/",
-    "https://www.sport24.gr/mpasket/"
-  ];
+async function scrapePage(url, source) {
+  try {
+    const res = await axios.get(url, { timeout: 5000 });
+    const $ = cheerio.load(res.data);
 
-  let articles = [];
+    let articles = [];
 
-  for (const url of urls) {
-    try {
-      const res = await axios.get(url);
-      const $ = cheerio.load(res.data);
+    $("article").each((_, el) => {
+      const title = $(el).find("h2, h3").text().trim();
+      const link = $(el).find("a").attr("href");
 
-      $("article").each((_, el) => {
-        const link = $(el).find("a").attr("href");
-        const title = $(el).find("h2, h3").first().text().trim();
+      if (!title || title.length < 20 || !link) return;
 
-        if (!title || title.length < 20) return;
+      const fullLink = link.startsWith("http") ? link : url + link;
 
-        const text = title + link;
+      const image =
+        $(el).find("img").attr("src") ||
+        $(el).find("img").attr("data-src") ||
+        "";
 
-        articles.push({
-          title,
-          link: link?.startsWith("http") ? link : `https://www.sport24.gr${link}`,
-          image: $(el).find("img").attr("src") || "",
-          pubDate: new Date(),
-          source: "Sport24",
-          team: detectTeam(text),
-          category: detectCategory(text)
-        });
+      const text = title + fullLink;
+
+      articles.push({
+        title,
+        link: fullLink,
+        image,
+        pubDate: new Date(),
+        source,
+        team: detectTeam(text),
+        category: detectCategory(text)
       });
+    });
 
-    } catch {}
+    return articles;
+
+  } catch {
+    return [];
   }
-
-  return articles;
 }
 
 // =======================
-//  SAVE (NO DUPLICATES)
+// 🔥 ALL SCRAPERS
+// =======================
+async function fetchAllSources() {
+  const tasks = [
+    fetchRSS(),
+
+    scrapePage("https://www.sport24.gr/", "Sport24"),
+    scrapePage("https://www.sport24.gr/podosfairo/", "Sport24"),
+    scrapePage("https://www.sport24.gr/mpasket/", "Sport24"),
+
+    scrapePage("https://www.sdna.gr/podosfairo", "SDNA"),
+    scrapePage("https://www.sdna.gr/mpasket", "SDNA"),
+
+    scrapePage("https://www.gazzetta.gr/football", "Gazzetta"),
+    scrapePage("https://www.gazzetta.gr/basketball", "Gazzetta"),
+
+    scrapePage("https://www.to10.gr/", "To10"),
+    scrapePage("https://sportday.gr/", "Sportday"),
+    scrapePage("https://www.novasports.gr/", "Novasports")
+  ];
+
+  const results = await Promise.all(tasks);
+  return results.flat();
+}
+
+// =======================
+// 🔥 SAVE
 // =======================
 async function saveArticles(list) {
   for (const article of list) {
@@ -198,19 +225,15 @@ async function saveArticles(list) {
 }
 
 // =======================
-//  MAIN ENGINE
+// 🔥 ENGINE
 // =======================
 async function fetchAll() {
-  console.log("Fetching...");
+  console.log("Fetching all sources...");
 
-  const rss = await fetchRSS();
-  const sport24 = await fetchSport24();
+  const articles = await fetchAllSources();
+  await saveArticles(articles);
 
-  const all = [...rss, ...sport24];
-
-  await saveArticles(all);
-
-  console.log("Saved:", all.length);
+  console.log("Saved:", articles.length);
 }
 
 // =======================
@@ -218,13 +241,12 @@ fetchAll();
 setInterval(fetchAll, 2 * 60 * 1000);
 
 // =======================
-//  API (REAL FILTERING)
+// 🔥 API
 // =======================
 app.get("/articles", async (req, res) => {
   const { team, category, source, page = 1 } = req.query;
 
   const query = {};
-
   if (team) query.team = team;
   if (category) query.category = category;
   if (source) query.source = source;
