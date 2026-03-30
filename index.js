@@ -1,8 +1,7 @@
 const express = require("express");
-const axios = require("axios");
 const cors = require("cors");
-const cheerio = require("cheerio");
 const mongoose = require("mongoose");
+const puppeteer = require("puppeteer");
 
 const app = express();
 app.use(cors());
@@ -33,88 +32,90 @@ function detectCategory(text) {
   return "other";
 }
 
-// ================= GENERIC ARTICLE PARSER =================
-async function parseArticle(url, source) {
-  try {
-    const res = await axios.get(url, { timeout: 5000 });
-    const $ = cheerio.load(res.data);
+// ================= BROWSER =================
+let browser;
 
-    const title =
-      $("meta[property='og:title']").attr("content") ||
-      $("title").text();
-
-    const image =
-      $("meta[property='og:image']").attr("content") ||
-      $("img").first().attr("src") ||
-      "";
-
-    const content = $("p").map((i,el)=>$(el).text()).get().join(" ");
-
-    return {
-      title,
-      link: url,
-      image,
-      content,
-      pubDate: new Date(),
-      source,
-      category: detectCategory(title + content)
-    };
-
-  } catch {
-    return null;
-  }
+async function initBrowser() {
+  browser = await puppeteer.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox"]
+  });
 }
 
-// ================= LINK EXTRACTOR =================
-async function extractLinks(url, selector) {
+// ================= SCRAPE PAGE =================
+async function scrapePage(url, source) {
+  const page = await browser.newPage();
+
   try {
-    const res = await axios.get(url);
-    const $ = cheerio.load(res.data);
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 20000 });
 
-    let links = new Set();
-
-    $(selector).each((_, el) => {
-      const link = $(el).attr("href");
-      if (link && link.includes("/")) {
-        links.add(link.startsWith("http") ? link : url + link);
-      }
+    const links = await page.evaluate(() => {
+      return Array.from(document.querySelectorAll("a"))
+        .map(a => a.href)
+        .filter(href => href.includes("/") && href.length > 30);
     });
 
-    return Array.from(links);
+    let articles = [];
+
+    for (const link of links.slice(0, 20)) {
+      try {
+        const articlePage = await browser.newPage();
+        await articlePage.goto(link, { waitUntil: "domcontentloaded" });
+
+        const data = await articlePage.evaluate(() => {
+          const title =
+            document.querySelector("meta[property='og:title']")?.content ||
+            document.title;
+
+          const image =
+            document.querySelector("meta[property='og:image']")?.content ||
+            "";
+
+          const paragraphs = Array.from(document.querySelectorAll("p"))
+            .map(p => p.innerText)
+            .join(" ");
+
+          return { title, image, content: paragraphs };
+        });
+
+        await articlePage.close();
+
+        if (!data.title || data.title.length < 20) continue;
+
+        articles.push({
+          title: data.title,
+          link,
+          image: data.image,
+          content: data.content,
+          pubDate: new Date(),
+          source,
+          category: detectCategory(data.title + data.content)
+        });
+
+      } catch {}
+    }
+
+    await page.close();
+    return articles;
 
   } catch {
+    await page.close();
     return [];
   }
 }
 
-// ================= CRAWL SITE =================
-async function crawlSite(baseUrl, selector, source) {
-  const links = await extractLinks(baseUrl, selector);
-
-  let articles = [];
-
-  for (const link of links.slice(0, 30)) {
-    const article = await parseArticle(link, source);
-    if (article && article.title.length > 20) {
-      articles.push(article);
-    }
-  }
-
-  return articles;
-}
-
-// ================= ALL SOURCES =================
-async function fetchAll() {
-  console.log("CRAWLING...");
+// ================= FULL CRAWL =================
+async function crawlAll() {
+  console.log("PUPPETEER CRAWLING...");
 
   const results = await Promise.all([
-    crawlSite("https://www.gazzetta.gr/football", "a", "Gazzetta"),
-    crawlSite("https://www.sdna.gr/podosfairo", "a", "SDNA"),
-    crawlSite("https://www.sport24.gr/", "a", "Sport24"),
-    crawlSite("https://www.to10.gr/", "a", "To10"),
-    crawlSite("https://sportday.gr/", "a", "Sportday"),
-    crawlSite("https://www.sport-fm.gr/", "a", "SportFM"),
-    crawlSite("https://www.athletiko.gr/", "a", "Athletiko")
+    scrapePage("https://www.gazzetta.gr/football", "Gazzetta"),
+    scrapePage("https://www.sdna.gr/podosfairo", "SDNA"),
+    scrapePage("https://www.sport24.gr/", "Sport24"),
+    scrapePage("https://www.to10.gr/", "To10"),
+    scrapePage("https://sportday.gr/", "Sportday"),
+    scrapePage("https://www.sport-fm.gr/", "SportFM"),
+    scrapePage("https://www.athletiko.gr/", "Athletiko")
   ]);
 
   const all = results.flat();
@@ -133,8 +134,11 @@ async function fetchAll() {
 }
 
 // ================= RUN =================
-fetchAll();
-setInterval(fetchAll, 180000);
+(async () => {
+  await initBrowser();
+  await crawlAll();
+  setInterval(crawlAll, 180000);
+})();
 
 // ================= API =================
 app.get("/articles", async (req, res) => {
