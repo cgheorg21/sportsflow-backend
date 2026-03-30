@@ -1,7 +1,8 @@
 const express = require("express");
+const axios = require("axios");
+const xml2js = require("xml2js");
 const cors = require("cors");
 const mongoose = require("mongoose");
-const puppeteer = require("puppeteer");
 
 const app = express();
 app.use(cors());
@@ -18,109 +19,115 @@ const Article = mongoose.model("Article", new mongoose.Schema({
   title: String,
   link: { type: String, unique: true },
   image: String,
-  content: String,
   pubDate: Date,
   source: String,
+  team: String,
   category: String
 }));
 
-// ================= CATEGORY =================
+// ================= KEYWORDS =================
+const teamKeywords = {
+  "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ","osfp"],
+  "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην","παο"],
+  "ΑΕΚ": ["αεκ"],
+  "ΠΑΟΚ": ["παοκ"],
+  "ΑΡΗΣ": ["αρη"],
+  "ΟΦΗ": ["οφη"],
+  "ΒΟΛΟΣ": ["βολο"],
+  "ΛΕΒΑΔΕΙΑΚΟΣ": ["λεβαδ"],
+  "ΑΤΡΟΜΗΤΟΣ": ["ατρομη"],
+  "ΚΗΦΙΣΙΑ": ["κηφισ"],
+  "ΠΑΝΑΙΤΩΛΙΚΟΣ": ["παναιτωλ"],
+  "ΑΕΛ": ["αελ"],
+  "ΠΑΝΣΕΡΑΙΚΟΣ": ["πανσερ"],
+  "ΑΣΤΕΡΑΣ": ["αστερα"],
+  "ΚΑΛΑΜΑΤΑ": ["καλαματ"],
+  "ΗΡΑΚΛΗΣ": ["ηρακλ"]
+};
+
+function detectTeam(text) {
+  text = text.toLowerCase();
+  for (const team in teamKeywords) {
+    if (teamKeywords[team].some(k => text.includes(k))) return team;
+  }
+  return null;
+}
+
 function detectCategory(text) {
   text = text.toLowerCase();
-  if (["nba","euroleague","μπασκετ"].some(k => text.includes(k))) return "basket";
-  if (["ποδοσφ","football","super league"].some(k => text.includes(k))) return "football";
-  return "other";
+
+  if (["nba","euroleague","μπασκετ"].some(k => text.includes(k)))
+    return "BASKET";
+
+  if (["ποδοσφ","football","super league","uefa"].some(k => text.includes(k)))
+    return "FOOTBALL";
+
+  return "OTHER";
 }
 
-// ================= BROWSER =================
-let browser;
+// ================= RSS =================
+const FEEDS = [
+  { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
+  { url: "https://www.sdna.gr/rss.xml", source: "SDNA" },
+  { url: "https://www.sport-fm.gr/rss/news", source: "SportFM" },
+  { url: "https://www.to10.gr/feed", source: "To10" },
+  { url: "https://sportday.gr/feed", source: "Sportday" },
+  { url: "https://www.athletiko.gr/feed", source: "Athletiko" },
+  { url: "https://www.novasports.gr/rss", source: "Novasports" }
+];
 
-async function initBrowser() {
-  browser = await puppeteer.launch({
-    headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox"]
-  });
-}
+// ================= FETCH =================
+async function fetchArticles() {
+  let all = [];
 
-// ================= SCRAPE PAGE =================
-async function scrapePage(url, source) {
-  const page = await browser.newPage();
+  const responses = await Promise.all(
+    FEEDS.map(f =>
+      axios.get(f.url, { timeout: 5000 })
+        .then(r => ({ data: r.data, source: f.source }))
+        .catch(() => null)
+    )
+  );
 
-  try {
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 20000 });
+  for (const feed of responses) {
+    if (!feed) continue;
 
-    const links = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("a"))
-        .map(a => a.href)
-        .filter(href => href.includes("/") && href.length > 30);
-    });
+    try {
+      const parsed = await xml2js.parseStringPromise(feed.data);
+      const items = parsed?.rss?.channel?.[0]?.item || [];
 
-    let articles = [];
+      for (const item of items) {
+        let title = item.title?.[0] || "";
+        const desc = item.description?.[0] || "";
+        const link = item.link?.[0] || "";
 
-    for (const link of links.slice(0, 20)) {
-      try {
-        const articlePage = await browser.newPage();
-        await articlePage.goto(link, { waitUntil: "domcontentloaded" });
+        // FIX SportFM titles
+        if (title.includes("|||")) {
+          const parts = title.split("|||").map(p => p.trim());
+          title = parts.reduce((a,b)=>a.length>b.length?a:b);
+        }
 
-        const data = await articlePage.evaluate(() => {
-          const title =
-            document.querySelector("meta[property='og:title']")?.content ||
-            document.title;
+        const text = (title + " " + desc + " " + link).toLowerCase();
 
-          const image =
-            document.querySelector("meta[property='og:image']")?.content ||
-            "";
-
-          const paragraphs = Array.from(document.querySelectorAll("p"))
-            .map(p => p.innerText)
-            .join(" ");
-
-          return { title, image, content: paragraphs };
-        });
-
-        await articlePage.close();
-
-        if (!data.title || data.title.length < 20) continue;
-
-        articles.push({
-          title: data.title,
+        all.push({
+          title,
           link,
-          image: data.image,
-          content: data.content,
-          pubDate: new Date(),
-          source,
-          category: detectCategory(data.title + data.content)
+          image: item.enclosure?.[0]?.$.url || "",
+          pubDate: new Date(item.pubDate?.[0] || Date.now()),
+          source: feed.source,
+          team: detectTeam(text),
+          category: detectCategory(text)
         });
+      }
 
-      } catch {}
-    }
-
-    await page.close();
-    return articles;
-
-  } catch {
-    await page.close();
-    return [];
+    } catch {}
   }
+
+  return all;
 }
 
-// ================= FULL CRAWL =================
-async function crawlAll() {
-  console.log("PUPPETEER CRAWLING...");
-
-  const results = await Promise.all([
-    scrapePage("https://www.gazzetta.gr/football", "Gazzetta"),
-    scrapePage("https://www.sdna.gr/podosfairo", "SDNA"),
-    scrapePage("https://www.sport24.gr/", "Sport24"),
-    scrapePage("https://www.to10.gr/", "To10"),
-    scrapePage("https://sportday.gr/", "Sportday"),
-    scrapePage("https://www.sport-fm.gr/", "SportFM"),
-    scrapePage("https://www.athletiko.gr/", "Athletiko")
-  ]);
-
-  const all = results.flat();
-
-  for (const a of all) {
+// ================= SAVE =================
+async function saveArticles(list) {
+  for (const a of list) {
     try {
       await Article.updateOne(
         { link: a.link },
@@ -129,22 +136,32 @@ async function crawlAll() {
       );
     } catch {}
   }
-
-  console.log("Saved:", all.length);
 }
 
-// ================= RUN =================
-(async () => {
-  await initBrowser();
-  await crawlAll();
-  setInterval(crawlAll, 180000);
-})();
+// ================= ENGINE =================
+async function run() {
+  console.log("Fetching articles...");
+
+  const articles = await fetchArticles();
+  await saveArticles(articles);
+
+  console.log("Saved:", articles.length);
+}
+
+run();
+setInterval(run, 2 * 60 * 1000);
 
 // ================= API =================
 app.get("/articles", async (req, res) => {
-  const { page = 1 } = req.query;
+  const { team, category, source, page = 1 } = req.query;
 
-  const data = await Article.find()
+  const query = {};
+
+  if (team) query.team = team;
+  if (category) query.category = category;
+  if (source) query.source = source;
+
+  const data = await Article.find(query)
     .sort({ pubDate: -1 })
     .skip((page - 1) * 20)
     .limit(20);
@@ -152,6 +169,7 @@ app.get("/articles", async (req, res) => {
   res.json(data);
 });
 
+// ================= START =================
 app.listen(PORT, () => {
-  console.log("Server running");
+  console.log(`Server running on ${PORT}`);
 });
