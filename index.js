@@ -84,11 +84,26 @@ const buildUrl = (href, base) => {
 const isArticle = (url) => {
   try {
     const u = new URL(url);
+
     return (
-      u.pathname.length > 10 &&
+      u.pathname.length > 20 &&
+
+      // ❌ κόψε junk
       !u.pathname.includes("category") &&
-      !u.pathname.includes("tag")
+      !u.pathname.includes("tag") &&
+      !u.pathname.includes("author") &&
+      !u.pathname.includes("match") &&
+      !u.pathname.includes("tv") &&
+      !u.pathname.includes("video") &&
+      !u.pathname.includes("league") &&
+      !u.pathname.includes("basket") &&
+      !u.pathname.includes("football") &&
+      !u.pathname.includes("news") &&
+
+      // ✅ ΠΡΕΠΕΙ να έχει slug άρθρου
+      u.pathname.split("/").length >= 4
     );
+
   } catch {
     return false;
   }
