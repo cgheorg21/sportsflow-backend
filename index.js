@@ -39,7 +39,7 @@ const Article = mongoose.model("Article", new mongoose.Schema({
 const teamMap = {
   "ΠΑΟΚ":         /\bπαοκ\b|δικέφαλος.βορρά|τούμπα|\bpaok\b/i,
   "ΟΛΥΜΠΙΑΚΟΣ":   /ολυμπιακ|θρύλος|\bolympiacos\b|\bolympiakos\b|καραϊσκάκη/i,
-  "ΠΑΝΑΘΗΝΑΙΚΟΣ": /παναθην|τριφύλλι|panathinaikos|\bpao\b/i,
+  "ΠΑΝΑΘΗΝΑΙΚΟΣ": /παναθην|τριφύλλι|\bpanathinaikos\b|\bpao\b/i,
   "ΑΕΚ":          /\bαεκ\b|\baek\b|αγιά.σοφιά/i,
   "ΑΡΗΣ":         /\bάρης\b|\bαρης\b|\baris\b|βικελίδης/i
 };
@@ -51,41 +51,35 @@ const detectTeam = (text) => {
   return "OTHER";
 };
 
-// ✅ Sport-specific keywords + source URL context
-const detectCategory = (title = "", articleUrl = "", sourceUrl = "") => {
-  const t = (title + " " + articleUrl + " " + sourceUrl).toLowerCase();
+// sourceCategory = η κατηγορία που ΞΕΡΟΥΜΕ από το source config (π.χ. "FOOTBALL")
+const detectCategory = (title = "", articleUrl = "", sourceCategory = null) => {
+  // Αν ο source μας λέει ήδη την κατηγορία, εμπιστευόμαστε τον
+  if (sourceCategory) return sourceCategory;
 
-  const basketKeywords = [
-    "basket", "μπασκετ", "μπάσκετ", "nba", "euroleague", "eurocup",
-    "basketball", "gbl", "basket league", "τριπόντο", "καλάθι",
-    "παρκέ", "rebound", "φάουλ", "τάιμ άουτ"
-  ];
+  const t = (title + " " + articleUrl).toLowerCase();
 
-  const footballKeywords = [
-    "football", "ποδοσφ", "podosfairo", "superleague", "super league",
-    "uefa", "champions league", "europa league", "conference league",
-    "premier league", "la liga", "serie a", "bundesliga", "ligue 1",
-    "γκολ", "πέναλτι", "οφσάιντ", "τέρμα", "κόρνερ", "αγωνιστ"
-  ];
+  const basketWords = ["basket", "μπασκετ", "μπάσκετ", "nba", "euroleague",
+    "eurocup", "basketball", "gbl", "basket league", "τριπόντο", "παρκέ"];
+  const footballWords = ["football", "ποδοσφ", "podosfairo", "superleague",
+    "super league", "uefa", "champions league", "europa league",
+    "premier league", "la liga", "serie a", "bundesliga", "γκολ", "πέναλτι"];
 
-  if (basketKeywords.some(k => t.includes(k))) return "BASKET";
-  if (footballKeywords.some(k => t.includes(k))) return "FOOTBALL";
+  if (basketWords.some(k => t.includes(k))) return "BASKET";
+  if (footballWords.some(k => t.includes(k))) return "FOOTBALL";
   return "ALL";
 };
 
 // ================= URL BUILDER =================
 function buildUrl(href, base) {
   try {
-    if (!href || href.startsWith("mailto:") || href.startsWith("javascript:") || href === "#") return null;
+    if (!href || href === "#" || href.startsWith("mailto:") || href.startsWith("javascript:")) return null;
     if (href.startsWith("http://") || href.startsWith("https://")) return href;
     return new URL(href, base).href;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 // ================= SCRAPER: ARTICLE PAGE =================
-async function fetchArticleDetails(url, source, sourceUrl) {
+async function fetchArticleDetails(url, source, sourceCategory) {
   try {
     await new Promise(r => setTimeout(r, 300));
     const res = await axios.get(url, AXIOS_CONFIG());
@@ -97,10 +91,14 @@ async function fetchArticleDetails(url, source, sourceUrl) {
 
     if (!title || title.length < 10) return null;
 
+    // Αποκλεισμός σελίδων ομάδων/κατηγοριών που δεν είναι άρθρα
+    const bodyText = $("article, .article-body, .entry-content").text();
+    if (bodyText.length < 100 && !$("meta[property='og:type'][content='article']").length) return null;
+
     let image =
       $("meta[property='og:image']").attr("content") ||
       $("meta[name='twitter:image']").attr("content") ||
-      $("article img, .featured-image img, .post-thumbnail img, .entry-image img").first().attr("src");
+      $("article img, .featured-image img, .post-thumbnail img").first().attr("src");
 
     if (image?.startsWith("/")) image = new URL(image, url).href;
 
@@ -111,17 +109,15 @@ async function fetchArticleDetails(url, source, sourceUrl) {
       pubDate: new Date(),
       source,
       team: detectTeam(title),
-      category: detectCategory(title, url, sourceUrl)
+      category: detectCategory(title, url, sourceCategory)
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// ================= SCRAPER: HTML LINK EXTRACTOR =================
+// ================= SCRAPER: HTML =================
 async function scrapeHtmlSource(site) {
   try {
-    console.log(`📡 Scraping HTML: ${site.name} → ${site.url}`);
+    console.log(`📡 Scraping: ${site.name} → ${site.url}`);
     const res = await axios.get(site.url, AXIOS_CONFIG());
     const $ = cheerio.load(res.data);
     const links = new Set();
@@ -131,13 +127,8 @@ async function scrapeHtmlSource(site) {
       const fullUrl = buildUrl(href, site.base);
       if (!fullUrl) return;
 
-      const blacklist = ["/category/", "/tag/", "/tags/", "/author/", "/videos/",
-                         "/gallery/", "/photos/", "/live/", "/event/", "?page=",
-                         "/protoselida", "/newspapers", "/radio", "/tv", "/matchcenter",
-                         "/vathmologies", "/programma", "/stoixima", "/kouponi"];
-
-      if (blacklist.some(b => fullUrl.includes(b))) return;
-      if (site.patterns.some(p => fullUrl.includes(p))) links.add(fullUrl);
+      // ✅ ΚΛΕΙΔΙ: Κάθε site έχει τη δική του λογική επαλήθευσης άρθρου
+      if (site.isArticle(fullUrl)) links.add(fullUrl);
     });
 
     console.log(`  🔗 ${site.name}: ${links.size} candidate links`);
@@ -149,7 +140,7 @@ async function scrapeHtmlSource(site) {
     for (let i = 0; i < linkArray.length; i += BATCH) {
       const batch = linkArray.slice(i, i + BATCH);
       const results = await Promise.allSettled(
-        batch.map(link => fetchArticleDetails(link, site.name, site.url))
+        batch.map(link => fetchArticleDetails(link, site.name, site.category))
       );
       results.forEach(r => { if (r.status === "fulfilled" && r.value) articles.push(r.value); });
       if (i + BATCH < linkArray.length) await new Promise(r => setTimeout(r, 800));
@@ -162,18 +153,18 @@ async function scrapeHtmlSource(site) {
   }
 }
 
-// ================= SCRAPER: RSS FEED (για SDNA που κάνει 403) =================
+// ================= SCRAPER: RSS =================
 async function scrapeRssFeed(feed) {
   try {
     console.log(`📡 RSS: ${feed.name} → ${feed.url}`);
     const res = await axios.get(feed.url, AXIOS_CONFIG());
     const parsed = await parseStringPromise(res.data, { explicitArray: false });
-    const items = parsed?.rss?.channel?.item || parsed?.feed?.entry || [];
+    const items = parsed?.rss?.channel?.item || [];
     const list = Array.isArray(items) ? items : [items];
 
     const articles = list.slice(0, 30).map(item => {
       const title = item.title?._ || item.title || "";
-      const link = item.link?.$ ? item.link.$.href : (item.link || item.guid || "");
+      const link = item.link || item.guid?._ || item.guid || "";
       const image =
         item["media:content"]?.$.url ||
         item["media:thumbnail"]?.$.url ||
@@ -185,16 +176,16 @@ async function scrapeRssFeed(feed) {
 
       return {
         title: title.trim(),
-        link,
+        link: typeof link === "string" ? link : "",
         image,
         pubDate,
         source: feed.name,
         team: detectTeam(title),
-        category: detectCategory(title, link, feed.url)
+        category: detectCategory(title, link, feed.category)
       };
     }).filter(Boolean);
 
-    console.log(`  ✅ ${feed.name}: ${articles.length} articles from RSS`);
+    console.log(`  ✅ ${feed.name} RSS: ${articles.length} articles`);
     return articles;
   } catch (err) {
     console.error(`❌ RSS ${feed.name}: ${err.message}`);
@@ -203,32 +194,94 @@ async function scrapeRssFeed(feed) {
 }
 
 // ================= SOURCES =================
-// HTML scrapers — με σωστά URLs και patterns βάσει fetch
+// Κάθε site έχει isArticle() που ελέγχει αν ένα URL είναι ΠΡΑΓΜΑΤΙΚΟ ΑΡΘΡΟ
 const htmlSources = [
-  // Gazzetta ✅ (δούλευε ήδη)
-  { name: "Gazzetta", url: "https://www.gazzetta.gr/football/superleague", base: "https://www.gazzetta.gr", patterns: ["/football/"] },
-  { name: "Gazzetta", url: "https://www.gazzetta.gr/basketball",           base: "https://www.gazzetta.gr", patterns: ["/basketball/"] },
 
-  // Sport24 ✅ FIX: αφαιρέθηκε "/article/" — τα URLs είναι /football/ΤΙΤΛΟΣ/
-  { name: "Sport24",  url: "https://www.sport24.gr/football/",             base: "https://www.sport24.gr",  patterns: ["/football/"] },
-  { name: "Sport24",  url: "https://www.sport24.gr/basket/",               base: "https://www.sport24.gr",  patterns: ["/basket/"] },
+  // ✅ GAZZETTA: Τα άρθρα έχουν αριθμητικό ID: /football/superleague/2527067/τιτλος
+  {
+    name: "Gazzetta", category: "FOOTBALL",
+    url: "https://www.gazzetta.gr/football/superleague",
+    base: "https://www.gazzetta.gr",
+    isArticle: (url) => /gazzetta\.gr\/football\/[^/]+\/\d{5,}\//.test(url)
+  },
+  {
+    name: "Gazzetta", category: "FOOTBALL",
+    url: "https://www.gazzetta.gr/football",
+    base: "https://www.gazzetta.gr",
+    isArticle: (url) => /gazzetta\.gr\/football\/[^/]+\/\d{5,}\//.test(url)
+  },
+  {
+    name: "Gazzetta", category: "BASKET",
+    url: "https://www.gazzetta.gr/basketball",
+    base: "https://www.gazzetta.gr",
+    isArticle: (url) => /gazzetta\.gr\/basketball\/[^/]+\/\d{5,}\//.test(url)
+  },
 
-  // SportFM ✅ FIX: σωστό URL (/list/podosfairo/1) + basket section
-  { name: "SportFM",  url: "https://www.sport-fm.gr/list/podosfairo/1",    base: "https://www.sport-fm.gr", patterns: ["/article/podosfairo/"] },
-  { name: "SportFM",  url: "https://www.sport-fm.gr/list/basket/2",        base: "https://www.sport-fm.gr", patterns: ["/article/basket/"] },
+  // ✅ SPORT24: /football/ΤΙΤΛΟΣ/ - χωρίς numeric ID, οπότε ελέγχουμε βάθος path & αποκλεισμό tag/
+  {
+    name: "Sport24", category: "FOOTBALL",
+    url: "https://www.sport24.gr/football/",
+    base: "https://www.sport24.gr",
+    isArticle: (url) => {
+      const path = new URL(url).pathname;
+      const parts = path.split("/").filter(Boolean);
+      // Άρθρα: /football/slug/ (2 parts) — ΟΧΙ /football/tag/xxx/
+      return parts.length === 2 && parts[0] === "football" && !["tag", "latest"].includes(parts[1]);
+    }
+  },
+  {
+    name: "Sport24", category: "BASKET",
+    url: "https://www.sport24.gr/basket/",
+    base: "https://www.sport24.gr",
+    isArticle: (url) => {
+      const path = new URL(url).pathname;
+      const parts = path.split("/").filter(Boolean);
+      return parts.length === 2 && parts[0] === "basket" && !["tag", "latest"].includes(parts[1]);
+    }
+  },
 
-  // To10 ✅ FIX: σωστό URL — /category/podosfero/ αντί /podosfero/
-  { name: "To10",     url: "https://www.to10.gr/category/podosfero/",      base: "https://www.to10.gr",     patterns: ["/category/podosfero/"] },
-  { name: "To10",     url: "https://www.to10.gr/category/basket/",         base: "https://www.to10.gr",     patterns: ["/category/basket/"] },
+  // ✅ SPORTFM: /article/podosfairo/ΥΠΟΚΑΤΗΓΟΡΙΑ/τιτλος/ID
+  {
+    name: "SportFM", category: "FOOTBALL",
+    url: "https://www.sport-fm.gr/list/podosfairo/1",
+    base: "https://www.sport-fm.gr",
+    isArticle: (url) => /sport-fm\.gr\/article\/podosfairo\//.test(url)
+  },
+  {
+    name: "SportFM", category: "BASKET",
+    url: "https://www.sport-fm.gr/list/basket/2",
+    base: "https://www.sport-fm.gr",
+    isArticle: (url) => /sport-fm\.gr\/article\/basket\//.test(url)
+  },
 
-  // Sportday ✅ FIX: τα άρθρα είναι /article/ paths
-  { name: "Sportday", url: "https://sportday.gr/podosfairo",               base: "https://sportday.gr",     patterns: ["/article/"] },
+  // ✅ TO10: /podosfero/ΥΠΟΚΑΤΗΓΟΡΙΑ/ΑΡΙΘΜΟΣ/τιτλος/
+  {
+    name: "To10", category: "FOOTBALL",
+    url: "https://www.to10.gr/category/podosfero/",
+    base: "https://www.to10.gr",
+    isArticle: (url) => /to10\.gr\/podosfero\/[^/]*\/?\d+\//.test(url) ||
+                        /to10\.gr\/podosfero\/\d+\//.test(url)
+  },
+  {
+    name: "To10", category: "BASKET",
+    url: "https://www.to10.gr/category/basket/",
+    base: "https://www.to10.gr",
+    isArticle: (url) => /to10\.gr\/basket\/[^/]*\/?\d+\//.test(url) ||
+                        /to10\.gr\/basket\/\d+\//.test(url)
+  },
+
+  // ✅ SPORTDAY: /article/ΤΙΤΛΟΣ (χωρίς /podosfairo/ στο path)
+  {
+    name: "Sportday", category: "FOOTBALL",
+    url: "https://sportday.gr/podosfairo",
+    base: "https://sportday.gr",
+    isArticle: (url) => /sportday\.gr\/article\//.test(url) && !url.includes("/video/")
+  },
 ];
 
-// RSS feeds — για sites που κάνουν 403 (π.χ. SDNA)
+// RSS για SDNA (403 στο HTML scraping)
 const rssFeeds = [
-  { name: "SDNA",     url: "https://www.sdna.gr/feed/" },
-  { name: "Gazzetta", url: "https://www.gazzetta.gr/feed/" }, // backup
+  { name: "SDNA", category: "FOOTBALL", url: "https://www.sdna.gr/feed/" },
 ];
 
 // ================= ENGINE =================
@@ -253,7 +306,7 @@ async function run() {
     } catch {}
   }
 
-  console.log(`\n🎯 Total new articles: ${totalNew} / ${allArticles.length} fetched`);
+  console.log(`🎯 Total new: ${totalNew} / ${allArticles.length} fetched`);
   console.log(`--- ✅ Done: ${new Date().toLocaleTimeString()} ---\n`);
 }
 
