@@ -89,85 +89,6 @@ const FEEDS = [
   { url: "https://www.athletiko.gr/feed", source: "Athletiko" },
   { url: "https://www.novasports.gr/rss", source: "Novasports" }
 ];
-
-// =======================
-// 🔥 MAIN ROUTE
-// =======================
-app.get("/articles", async (req, res) => {
-  try {
-
-    const now = Date.now();
-
-    if (cache && now - lastFetchTime < CACHE_DURATION) {
-      console.log("Serving from cache");
-      return res.json(cache);
-    }
-
-    console.log("Fetching fresh data");
-
-    const feedPromises = FEEDS.map(feed =>
-      axios.get(feed.url, {
-        headers: { "User-Agent": "Mozilla/5.0" },
-        timeout: 5000
-      })
-      .then(res => ({ data: res.data, source: feed.source }))
-      .catch(() => null)
-    );
-
-    const feedResponses = await Promise.all(feedPromises);
-
-    let allArticles = [];
-
-    for (const feed of feedResponses) {
-      if (!feed) continue;
-
-      try {
-        const result = await xml2js.parseStringPromise(feed.data);
-        let items = result?.rss?.channel?.[0]?.item || [];
-
-        items = items.slice(0, 40);
-
-        const articles = items.map(item => {
-
-          const title =
-            typeof item.title?.[0] === "object"
-              ? item.title[0]._ || ""
-              : item.title?.[0] || "";
-
-          const link =
-            item.link?.[0]?.$?.href ||
-            item.link?.[0] ||
-            "";
-
-          const text = title + link;
-
-          return {
-            title,
-            link,
-            pubDate: item.pubDate?.[0] || new Date().toISOString(),
-            image: extractImage(item),
-            source: feed.source,
-            team: detectTeam(text),
-            category: detectCategory(text)
-          };
-        });
-
-        allArticles = allArticles.concat(articles);
-
-      } catch (e) {}
-    }
-
-    cache = allArticles;
-    lastFetchTime = Date.now();
-
-    res.json(allArticles);
-
-  } catch (err) {
-    console.log("ERROR:", err.message);
-    res.status(500).json({ error: "Error fetching articles" });
-  }
-});
-// =======================
 // 🔥 SPORT24
 // =======================
 async function fetchSport24() {
@@ -413,7 +334,83 @@ if ((!image || image.length < 10) && link) {
     return [];
   }
 }
+// =======================
+async function fetchAndCacheArticles() {
+  try {
+    console.log("Auto fetching...");
 
+    const feedPromises = FEEDS.map(feed =>
+      axios.get(feed.url, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        timeout: 5000
+      })
+      .then(res => ({ data: res.data, source: feed.source }))
+      .catch(() => null)
+    );
+
+    const feedResponses = await Promise.all(feedPromises);
+
+    let allArticles = [];
+
+    for (const feed of feedResponses) {
+      if (!feed) continue;
+
+      try {
+        const result = await xml2js.parseStringPromise(feed.data);
+        let items = result?.rss?.channel?.[0]?.item || [];
+
+        items = items.slice(0, 40);
+
+        const articles = items.map(item => {
+          const title =
+            typeof item.title?.[0] === "object"
+              ? item.title[0]._ || ""
+              : item.title?.[0] || "";
+
+          const link =
+            item.link?.[0]?.$?.href ||
+            item.link?.[0] ||
+            "";
+
+          const text = title + link;
+
+          return {
+            title,
+            link,
+            pubDate: item.pubDate?.[0] || new Date().toISOString(),
+            image: extractImage(item),
+            source: feed.source,
+            team: detectTeam(text),
+            category: detectCategory(text)
+          };
+        });
+
+        allArticles = allArticles.concat(articles);
+
+      } catch (e) {}
+    }
+
+    cache = allArticles;
+    lastFetchTime = Date.now();
+
+    console.log("Cache updated:", allArticles.length);
+
+  } catch (err) {
+    console.log("Auto fetch error:", err.message);
+  }
+}
+// 🔥 MAIN ROUTE
+// =======================
+app.get("/articles", (req, res) => {
+  if (cache) {
+    return res.json(cache);
+  } else {
+    return res.json([]);
+  }
+});
+// =======================
+fetchAndCacheArticles(); // τρέχει μόλις ανοίξει ο server
+setInterval(fetchAndCacheArticles, 2 * 60 * 1000); // κάθε 2 λεπτά
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
 });
