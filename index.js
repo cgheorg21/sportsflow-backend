@@ -8,13 +8,12 @@ const app = express();
 app.use(cors());
 const PORT = process.env.PORT || 3000;
 
-// ================= AXIOS (ANTI-BLOCK) =================
+// ================= AXIOS =================
 const axiosInstance = axios.create({
   timeout: 10000,
   headers: {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept-Language": "el-GR,el;q=0.9,en;q=0.8",
+    "User-Agent": "Mozilla/5.0",
+    Accept: "text/html",
   },
 });
 
@@ -74,22 +73,15 @@ const buildUrl = (href, base) => {
   }
 };
 
-// ΦΙΛΤΡΟ για να κόψει menus / categories
+// 🔥 ΧΑΛΑΡΟ FILTER (IMPORTANT)
 const isArticle = (url) => {
   try {
     const u = new URL(url);
 
     return (
-      u.pathname.length > 20 &&
+      u.pathname.length > 10 &&
       !u.pathname.includes("category") &&
-      !u.pathname.includes("tag") &&
-      !u.pathname.includes("author") &&
-      !u.pathname.includes("page") &&
-      !u.pathname.includes("video") &&
-      !u.pathname.includes("photos") &&
-      !u.pathname.includes("live") &&
-      !u.pathname.includes("matchcenter") &&
-      !u.pathname.includes("vathmologies")
+      !u.pathname.includes("tag")
     );
   } catch {
     return false;
@@ -106,9 +98,10 @@ async function fetchArticle(url, source, sourceCategory) {
 
     let title =
       $("meta[property='og:title']").attr("content") ||
-      $("h1").first().text();
+      $("h1").first().text() ||
+      $("title").text();
 
-    if (!title || title.length < 10) return null;
+    if (!title || title.length < 5) return null;
 
     let image =
       $("meta[property='og:image']").attr("content") ||
@@ -142,7 +135,7 @@ async function fetchArticle(url, source, sourceCategory) {
 }
 
 // ================= SCRAPER =================
-const MAX_LINKS = 25;
+const MAX_LINKS = 30;
 
 async function scrape(site) {
   try {
@@ -162,6 +155,8 @@ async function scrape(site) {
       }
     });
 
+    console.log("🔗 LINKS FOUND:", site.name, links.size);
+
     const list = Array.from(links).slice(0, MAX_LINKS);
     const articles = [];
 
@@ -172,10 +167,11 @@ async function scrape(site) {
       await delay(200);
     }
 
-    console.log(site.name, articles.length);
+    console.log("📰 ARTICLES:", site.name, articles.length);
+
     return articles;
   } catch (err) {
-    console.log("", site.name);
+    console.log("❌", site.name);
     return [];
   }
 }
@@ -209,7 +205,7 @@ const sources = [
 
 // ================= ENGINE =================
 async function run() {
-  console.log("SCRAPER START");
+  console.log("🚀 SCRAPER START");
 
   const all = [];
 
@@ -232,12 +228,12 @@ async function run() {
     } catch {}
   }
 
-  console.log("DONE:", all.length);
+  console.log("✅ DONE:", all.length);
 }
 
 // ================= START =================
 mongoose.connection.once("open", () => {
-  console.log("DB READY");
+  console.log("✅ DB READY");
 
   run();
   setInterval(run, 15 * 60 * 1000);
@@ -245,27 +241,11 @@ mongoose.connection.once("open", () => {
 
 // ================= API =================
 app.get("/articles", async (req, res) => {
-  const { category, team, source } = req.query;
-
-  const query = {};
-
-  if (category && category !== "ALL") {
-    query.categories = { $in: [category] };
-  }
-
-  if (team && team !== "ALL") {
-    query.categories = { $in: [team] };
-  }
-
-  if (source) {
-    query.categories = { $in: [source] };
-  }
-
-  const data = await Article.find(query)
+  const data = await Article.find()
     .sort({ pubDate: -1 })
-    .limit(60);
+    .limit(100);
 
   res.json(data);
 });
 
-app.listen(PORT, () => console.log("Server running"));
+app.listen(PORT, () => console.log("🌍 Server running"));
