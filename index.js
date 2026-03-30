@@ -124,70 +124,126 @@ async function scrapeLinks(url, base, match, source) {
 }
 
 // ================= SCRAPERS =================
-const scrapeGazzetta = () =>
-  scrapeLinks(
+
+const scrapeGazzetta = async () => [
+  ...(await scrapeLinks(
     "https://www.gazzetta.gr/football",
     "https://www.gazzetta.gr",
-    ["/football/", "/basketball/"],
+    ["/football/"],
     "Gazzetta"
-  );
+  )),
+  ...(await scrapeLinks(
+    "https://www.gazzetta.gr/basketball",
+    "https://www.gazzetta.gr",
+    ["/basketball/"],
+    "Gazzetta"
+  ))
+];
 
-const scrapeSDNA = () =>
-  scrapeLinks(
+const scrapeSDNA = async () => [
+  ...(await scrapeLinks(
     "https://www.sdna.gr/podosfairo",
     "https://www.sdna.gr",
-    ["/podosfairo/", "/mpasket/"],
+    ["/podosfairo/"],
     "SDNA"
-  );
+  )),
+  ...(await scrapeLinks(
+    "https://www.sdna.gr/mpasket",
+    "https://www.sdna.gr",
+    ["/mpasket/"],
+    "SDNA"
+  ))
+];
 
-const scrapeSport24 = () =>
-  scrapeLinks(
-    "https://www.sport24.gr/",
+const scrapeSport24 = async () => [
+  ...(await scrapeLinks(
+    "https://www.sport24.gr/football",
     "https://www.sport24.gr",
-    ["/football/", "/basket/"],
+    ["/football/"],
     "Sport24"
-  );
+  )),
+  ...(await scrapeLinks(
+    "https://www.sport24.gr/basket",
+    "https://www.sport24.gr",
+    ["/basket/"],
+    "Sport24"
+  ))
+];
 
-const scrapeSportFM = () =>
-  scrapeLinks(
-    "https://www.sport-fm.gr/",
+const scrapeSportFM = async () => [
+  ...(await scrapeLinks(
+    "https://www.sport-fm.gr/news/podosfairo",
     "https://www.sport-fm.gr",
     ["/article/"],
     "SportFM"
-  );
+  )),
+  ...(await scrapeLinks(
+    "https://www.sport-fm.gr/news/basket",
+    "https://www.sport-fm.gr",
+    ["/article/"],
+    "SportFM"
+  ))
+];
 
-const scrapeTo10 = () =>
-  scrapeLinks(
-    "https://www.to10.gr/",
+const scrapeTo10 = async () => [
+  ...(await scrapeLinks(
+    "https://www.to10.gr/category/podosfero/",
     "https://www.to10.gr",
-    ["/category/podosfero/", "/category/basket/"],
+    ["/podosfero/"],
     "To10"
-  );
+  )),
+  ...(await scrapeLinks(
+    "https://www.to10.gr/category/basket/",
+    "https://www.to10.gr",
+    ["/basket/"],
+    "To10"
+  ))
+];
 
-const scrapeSportday = () =>
-  scrapeLinks(
-    "https://sportday.gr/",
+const scrapeSportday = async () => [
+  ...(await scrapeLinks(
+    "https://sportday.gr/podosfairo",
     "https://sportday.gr",
-    ["/podosfairo/", "/basket/"],
+    ["/podosfairo/"],
     "Sportday"
-  );
+  )),
+  ...(await scrapeLinks(
+    "https://sportday.gr/basket",
+    "https://sportday.gr",
+    ["/basket/"],
+    "Sportday"
+  ))
+];
 
-const scrapeAthletiko = () =>
-  scrapeLinks(
-    "https://www.athletiko.gr/",
+const scrapeAthletiko = async () => [
+  ...(await scrapeLinks(
+    "https://www.athletiko.gr/podosfairo",
     "https://www.athletiko.gr",
-    ["/podosfairo/", "/mpasket/"],
+    ["/podosfairo/"],
     "Athletiko"
-  );
+  )),
+  ...(await scrapeLinks(
+    "https://www.athletiko.gr/mpasket",
+    "https://www.athletiko.gr",
+    ["/mpasket/"],
+    "Athletiko"
+  ))
+];
 
-const scrapeNovasports = () =>
-  scrapeLinks(
-    "https://www.novasports.gr/",
+const scrapeNovasports = async () => [
+  ...(await scrapeLinks(
+    "https://www.novasports.gr/sport/podosfairo/news/",
     "https://www.novasports.gr",
-    ["/sport/podosfairo/news/", "/sport/mpasket/news/"],
+    ["/podosfairo/"],
     "Novasports"
-  );
-
+  )),
+  ...(await scrapeLinks(
+    "https://www.novasports.gr/sport/mpasket/news/",
+    "https://www.novasports.gr",
+    ["/mpasket/"],
+    "Novasports"
+  ))
+];
 // ================= ENGINE =================
 async function run() {
   console.log("Fetching FULL...");
