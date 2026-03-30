@@ -2,23 +2,36 @@ const express = require("express");
 const axios = require("axios");
 const cheerio = require("cheerio");
 const cors = require("cors");
+const mongoose = require("mongoose");
 
 const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
+// ================= DB =================
+mongoose.connect(process.env.MONGO_URI)
+.then(() => console.log("MongoDB connected"))
+.catch(err => console.log("Mongo error:", err));
+
+const ArticleSchema = new mongoose.Schema({
+  title: String,
+  link: String,
+  image: String,
+  source: String,
+  team: String,
+  pubDate: Date
+});
+
+const Article = mongoose.model("Article", ArticleSchema);
+
+// ================= TEAMS =================
 const TEAMS = [
   "ΑΕΚ","ΟΛΥΜΠΙΑΚΟΣ","ΠΑΝΑΘΗΝΑΙΚΟΣ","ΠΑΟΚ","ΑΡΗΣ",
   "ΟΦΗ","ΒΟΛΟΣ","ΛΕΒΑΔΕΙΑΚΟΣ","ΑΤΡΟΜΗΤΟΣ","ΚΗΦΙΣΙΑ",
   "ΠΑΝΑΙΤΩΛΙΚΟΣ","ΑΕΛ","ΠΑΝΣΕΡΑΙΚΟΣ","ΑΣΤΕΡΑΣ",
   "ΚΑΛΑΜΑΤΑ","ΗΡΑΚΛΗΣ"
 ];
-
-// ================= HELPERS =================
-
-const cleanTitle = (title) =>
-  title.replace(/\s+/g, " ").trim();
 
 const detectTeam = (title) => {
   const t = title.toUpperCase();
@@ -28,19 +41,17 @@ const detectTeam = (title) => {
   return "OTHER";
 };
 
+const cleanTitle = (t) => t.replace(/\s+/g, " ").trim();
+
 const isValid = (title, image) => {
   if (!title || title.length < 15) return false;
   if (!image || !image.startsWith("http")) return false;
 
-  const bad = [
-    "video","live","gallery","photo",
-    "βαθμολογία","πρόγραμμα","market","auto","moto"
-  ];
-
+  const bad = ["video","live","gallery","photo","βαθμολογία","πρόγραμμα","market"];
   return !bad.some(w => title.toLowerCase().includes(w));
 };
 
-// ================= SPORT24 =================
+// ================= SCRAPERS =================
 
 const scrapeSport24 = async () => {
   try {
@@ -51,12 +62,8 @@ const scrapeSport24 = async () => {
 
     $("article").each((_, el) => {
       let title = cleanTitle($(el).find("h2, h3").first().text());
-
       let link = $(el).find("a").attr("href");
-
-      let image =
-        $(el).find("img").attr("src") ||
-        $(el).find("img").attr("data-src");
+      let image = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
 
       if (!title || !link || !image) return;
 
@@ -83,8 +90,6 @@ const scrapeSport24 = async () => {
   }
 };
 
-// ================= SDNA =================
-
 const scrapeSDNA = async () => {
   try {
     const { data } = await axios.get("https://www.sdna.gr/podosfairo");
@@ -94,12 +99,8 @@ const scrapeSDNA = async () => {
 
     $("article").each((_, el) => {
       let title = cleanTitle($(el).find("h2, h3").text());
-
       let link = $(el).find("a").attr("href");
-
-      let image =
-        $(el).find("img").attr("src") ||
-        $(el).find("img").attr("data-src");
+      let image = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
 
       if (!title || !link || !image) return;
 
@@ -126,8 +127,6 @@ const scrapeSDNA = async () => {
   }
 };
 
-// ================= GAZZETTA =================
-
 const scrapeGazzetta = async () => {
   try {
     const { data } = await axios.get("https://www.gazzetta.gr/football");
@@ -137,12 +136,8 @@ const scrapeGazzetta = async () => {
 
     $("article").each((_, el) => {
       let title = cleanTitle($(el).find("h2, h3").text());
-
       let link = $(el).find("a").attr("href");
-
-      let image =
-        $(el).find("img").attr("src") ||
-        $(el).find("img").attr("data-src");
+      let image = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
 
       if (!title || !link || !image) return;
 
@@ -170,7 +165,6 @@ const scrapeGazzetta = async () => {
 };
 
 // ================= DEDUPE =================
-
 const dedupe = (arr) => {
   const seen = new Set();
   return arr.filter(a => {
@@ -180,10 +174,17 @@ const dedupe = (arr) => {
   });
 };
 
-// ================= ROUTE /articles =================
-
+// ================= ROUTE =================
 app.get("/articles", async (req, res) => {
   try {
+    // 1. DB FIRST
+    const cached = await Article.find().sort({ pubDate: -1 }).limit(50);
+
+    if (cached.length > 20) {
+      return res.json(cached);
+    }
+
+    // 2. SCRAPE
     const [s1, s2, s3] = await Promise.all([
       scrapeSport24(),
       scrapeSDNA(),
@@ -191,19 +192,21 @@ app.get("/articles", async (req, res) => {
     ]);
 
     let all = [...s1, ...s2, ...s3];
-
     all = dedupe(all);
 
-    all.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
+    // 3. SAVE DB
+    await Article.deleteMany({});
+    await Article.insertMany(all);
 
-    res.json(all.slice(0, 50));
+    res.json(all);
+
   } catch (err) {
+    console.log(err);
     res.status(500).json({ error: "FAILED" });
   }
 });
 
 // ================= START =================
-
 app.listen(PORT, () => {
-  console.log("API RUNNING 🚀 " + PORT);
+  console.log("RUNNING ON " + PORT);
 });
