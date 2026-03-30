@@ -1,7 +1,7 @@
-import express from "express";
-import axios from "axios";
-import * as cheerio from "cheerio";
-import cors from "cors";
+const express = require("express");
+const axios = require("axios");
+const cheerio = require("cheerio");
+const cors = require("cors");
 
 const app = express();
 app.use(cors());
@@ -146,7 +146,6 @@ app.get("/news", async (req, res) => {
 
     const allNews = [...sport24, ...sdna, ...gazzetta];
 
-    // remove duplicates
     const unique = Object.values(
       allNews.reduce((acc, item) => {
         acc[item.title] = item;
@@ -161,7 +160,7 @@ app.get("/news", async (req, res) => {
 });
 
 
-// ================= FILTER BY TEAM =================
+// ================= FILTER =================
 app.get("/news/:team", async (req, res) => {
   const team = req.params.team;
 
