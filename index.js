@@ -14,12 +14,14 @@ mongoose.connect(process.env.MONGO_URI)
 .then(() => console.log("MongoDB connected"))
 .catch(err => console.log("Mongo error:", err));
 
+// ================= SCHEMA =================
 const ArticleSchema = new mongoose.Schema({
   title: String,
   link: String,
   image: String,
   source: String,
   team: String,
+  categories: [String],
   pubDate: Date
 });
 
@@ -75,22 +77,30 @@ const isValid = (title, image) => {
   if (!image || !image.startsWith("http")) return false;
 
   const bad = [
-    "video",
-    "live",
-    "gallery",
-    "photo",
-    "βαθμολογία",
-    "πρόγραμμα",
-    "market",
-    "στοιχημα"
+    "video","live","gallery","photo",
+    "βαθμολογία","πρόγραμμα","market","στοιχημα"
   ];
 
   return !bad.some(w => title.toLowerCase().includes(w));
 };
 
+const buildCategories = (team, source) => {
+  const cats = ["ALL", "FOOTBALL"];
+
+  if (team && team !== "OTHER") {
+    cats.push(team);
+  }
+
+  if (source) {
+    cats.push(source);
+  }
+
+  return cats;
+};
+
 // ================= SCRAPERS =================
 
-// SPORT24 (FIXED)
+// SPORT24
 const scrapeSport24 = async () => {
   try {
     const { data } = await axios.get("https://www.sport24.gr/football/");
@@ -98,12 +108,13 @@ const scrapeSport24 = async () => {
 
     const articles = [];
 
-    $("article").each((_, el) => {
-      let title = cleanTitle($(el).find("h3, h2").first().text());
-      let link = $(el).find("a").attr("href");
-      let image = getImage(el, $);
+    $(".article").each((_, el) => {
 
-      if (!title || !link) return;
+      let title = cleanTitle($(el).find("h3").first().text());
+      let link = $(el).find("a").attr("href");
+      let image = $(el).find("img").attr("src");
+
+      if (!title || !link || !image) return;
 
       if (!link.startsWith("http")) {
         link = "https://www.sport24.gr" + link;
@@ -111,24 +122,28 @@ const scrapeSport24 = async () => {
 
       if (!isValid(title, image)) return;
 
+      const team = detectTeam(title);
+
       articles.push({
         title,
         link,
         image,
         source: "Sport24",
-        team: detectTeam(title),
+        team,
+        categories: buildCategories(team, "Sport24"),
         pubDate: new Date()
       });
     });
 
     return articles;
+
   } catch (err) {
     console.log("Sport24 ERROR:", err.message);
     return [];
   }
 };
 
-// SDNA (FIXED)
+// SDNA
 const scrapeSDNA = async () => {
   try {
     const { data } = await axios.get("https://www.sdna.gr/podosfairo");
@@ -136,12 +151,13 @@ const scrapeSDNA = async () => {
 
     const articles = [];
 
-    $("article").each((_, el) => {
-      let title = cleanTitle($(el).find("h3, h2").text());
+    $(".article").each((_, el) => {
+
+      let title = cleanTitle($(el).find("h3").text());
       let link = $(el).find("a").attr("href");
       let image = getImage(el, $);
 
-      if (!title || !link) return;
+      if (!title || !link || !image) return;
 
       if (!link.startsWith("http")) {
         link = "https://www.sdna.gr" + link;
@@ -149,24 +165,28 @@ const scrapeSDNA = async () => {
 
       if (!isValid(title, image)) return;
 
+      const team = detectTeam(title);
+
       articles.push({
         title,
         link,
         image,
         source: "SDNA",
-        team: detectTeam(title),
+        team,
+        categories: buildCategories(team, "SDNA"),
         pubDate: new Date()
       });
     });
 
     return articles;
+
   } catch (err) {
     console.log("SDNA ERROR:", err.message);
     return [];
   }
 };
 
-// GAZZETTA (FIXED - ΠΟΛΥ ΣΗΜΑΝΤΙΚΟ)
+// GAZZETTA
 const scrapeGazzetta = async () => {
   try {
     const { data } = await axios.get("https://www.gazzetta.gr/football");
@@ -174,12 +194,13 @@ const scrapeGazzetta = async () => {
 
     const articles = [];
 
-    $("a").each((_, el) => {
-      let title = cleanTitle($(el).text());
-      let link = $(el).attr("href");
+    $(".teaser").each((_, el) => {
+
+      let title = cleanTitle($(el).find("h3").text());
+      let link = $(el).find("a").attr("href");
       let image = getImage(el, $);
 
-      if (!title || !link) return;
+      if (!title || !link || !image) return;
 
       if (!link.startsWith("http")) {
         link = "https://www.gazzetta.gr" + link;
@@ -187,17 +208,21 @@ const scrapeGazzetta = async () => {
 
       if (!isValid(title, image)) return;
 
+      const team = detectTeam(title);
+
       articles.push({
         title,
         link,
         image,
         source: "Gazzetta",
-        team: detectTeam(title),
+        team,
+        categories: buildCategories(team, "Gazzetta"),
         pubDate: new Date()
       });
     });
 
     return articles;
+
   } catch (err) {
     console.log("Gazzetta ERROR:", err.message);
     return [];
@@ -207,6 +232,7 @@ const scrapeGazzetta = async () => {
 // ================= DEDUPE =================
 const dedupe = (arr) => {
   const seen = new Set();
+
   return arr.filter(a => {
     const key = a.title + a.link;
     if (seen.has(key)) return false;
@@ -219,14 +245,16 @@ const dedupe = (arr) => {
 app.get("/articles", async (req, res) => {
   try {
 
-    // DB FIRST
-    const cached = await Article.find().sort({ pubDate: -1 }).limit(50);
+    // 1. DB FIRST
+    const cached = await Article.find()
+      .sort({ pubDate: -1 })
+      .limit(50);
 
     if (cached.length > 20) {
       return res.json(cached);
     }
 
-    // SCRAPE
+    // 2. SCRAPE
     const [s1, s2, s3] = await Promise.all([
       scrapeSport24(),
       scrapeSDNA(),
@@ -236,7 +264,7 @@ app.get("/articles", async (req, res) => {
     let all = [...s1, ...s2, ...s3];
     all = dedupe(all);
 
-    // SAVE
+    // 3. SAVE DB
     await Article.deleteMany({});
     await Article.insertMany(all);
 
