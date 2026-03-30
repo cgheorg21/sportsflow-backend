@@ -1,209 +1,189 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const axios = require('axios');
-const cheerio = require('cheerio');
-const cors = require('cors');
+import express from "express";
+import axios from "axios";
+import * as cheerio from "cheerio";
+import cors from "cors";
 
 const app = express();
 app.use(cors());
 
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 
-// ================= DB =================
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('✅ DB CONNECTED'))
-  .catch(err => console.log('❌ DB ERROR:', err));
+const TEAMS = [
+  "ΑΕΚ", "ΟΛΥΜΠΙΑΚΟΣ", "ΠΑΝΑΘΗΝΑΙΚΟΣ", "ΠΑΟΚ", "ΑΡΗΣ",
+  "ΟΦΗ", "ΒΟΛΟΣ", "ΛΕΒΑΔΕΙΑΚΟΣ", "ΑΤΡΟΜΗΤΟΣ", "ΚΗΦΙΣΙΑ",
+  "ΠΑΝΑΙΤΩΛΙΚΟΣ", "ΑΕΛ", "ΠΑΝΣΕΡΑΙΚΟΣ", "ΑΣΤΕΡΑΣ",
+  "ΚΑΛΑΜΑΤΑ", "ΗΡΑΚΛΗΣ"
+];
 
-// ================= MODEL =================
-const articleSchema = new mongoose.Schema({
-  title: String,
-  link: { type: String, unique: true },
-  image: String,
-  source: String,
-  category: String,
-  team: String,
-  categories: [String],
-  pubDate: Date
-});
+const isValidArticle = (title, image) => {
+  if (!title || title.length < 20) return false;
+  if (!image || !image.startsWith("http")) return false;
 
-const Article = mongoose.model('Article', articleSchema);
-
-// ================= FILTER =================
-function isArticle(link, title) {
-  if (!link || !title) return false;
-
-  const badPatterns = [
-    '/tag/', '/category/', '/author/', '/teams/', '/team-sport/',
-    '/list/', '/program', '/tv', '/radio', '/app',
-    'instagram', 'facebook', 'twitter', 'youtube', 'tiktok',
-    '/match', '/league', '/cup'
+  const badWords = [
+    "video",
+    "live",
+    "stats",
+    "βαθμολογία",
+    "πρόγραμμα",
+    "market"
   ];
 
-  const badTitles = [
-    'live', 'match center', 'πρόγραμμα',
-    'βαθμολογίες', 'videos', 'highlights'
-  ];
+  return !badWords.some(w => title.toLowerCase().includes(w));
+};
 
-  const isBadLink = badPatterns.some(p => link.toLowerCase().includes(p));
-  const isBadTitle = badTitles.some(p => title.toLowerCase().includes(p));
-
-  const looksLikeArticle =
-    link.split('/').length > 5 ||
-    /\d{4}/.test(link);
-
-  return !isBadLink && !isBadTitle && looksLikeArticle;
-}
-
-// ================= CATEGORY =================
-function detectCategory(title, link) {
-  const text = (title + ' ' + link).toLowerCase();
-
-  if (
-    text.includes('basket') ||
-    text.includes('nba') ||
-    text.includes('euroleague')
-  ) {
-    return 'BASKET';
+const detectTeam = (title) => {
+  for (let team of TEAMS) {
+    if (title.includes(team)) return team;
   }
-
-  return 'FOOTBALL';
-}
-
-// ================= TEAMS =================
-function detectTeam(title) {
-  const t = title.toLowerCase();
-
-  const teams = [
-    { name: "ΑΕΚ", keywords: ['αεκ'] },
-    { name: "ΟΛΥΜΠΙΑΚΟΣ", keywords: ['ολυμπιακ'] },
-    { name: "ΠΑΝΑΘΗΝΑΙΚΟΣ", keywords: ['παναθηναϊκ', 'παναθηναικ'] },
-    { name: "ΠΑΟΚ", keywords: ['παοκ'] },
-    { name: "ΑΡΗΣ", keywords: ['αρης'] },
-    { name: "ΟΦΗ", keywords: ['οφη'] },
-    { name: "ΒΟΛΟΣ", keywords: ['βολος'] },
-    { name: "ΛΕΒΑΔΕΙΑΚΟΣ", keywords: ['λεβαδειακ'] },
-    { name: "ΑΤΡΟΜΗΤΟΣ", keywords: ['ατρομητος'] },
-    { name: "ΚΗΦΙΣΙΑ", keywords: ['κηφισια'] },
-    { name: "ΠΑΝΑΙΤΩΛΙΚΟΣ", keywords: ['παναιτωλικ'] },
-    { name: "ΑΕΛ", keywords: ['αελ'] },
-    { name: "ΠΑΝΣΕΡΑΙΚΟΣ", keywords: ['πανσερραικ'] },
-    { name: "ΑΣΤΕΡΑΣ", keywords: ['αστερας'] },
-    { name: "ΚΑΛΑΜΑΤΑ", keywords: ['καλαματα'] },
-    { name: "ΗΡΑΚΛΗΣ", keywords: ['ηρακλης'] }
-  ];
-
-  for (let team of teams) {
-    if (team.keywords.some(k => t.includes(k))) {
-      return team.name;
-    }
-  }
-
   return "OTHER";
-}
+};
 
-// ================= IMAGE =================
-function extractImage($) {
-  let image =
-    $('meta[property="og:image"]').attr('content') ||
-    $('meta[name="twitter:image"]').attr('content') ||
-    $('img').first().attr('src') ||
-    '';
 
-  if (image && image.startsWith('//')) {
-    image = 'https:' + image;
-  }
-
-  return image;
-}
-
-// ================= SCRAPER =================
-async function scrapeSite(url, source) {
+// ================= SPORT24 =================
+const scrapeSport24 = async () => {
   try {
-    console.log(`📡 ${source}`);
-
-    const { data } = await axios.get(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }
-    });
-
+    const { data } = await axios.get("https://www.sport24.gr/football/");
     const $ = cheerio.load(data);
-    const links = [];
 
-    $('a').each((i, el) => {
-      const link = $(el).attr('href');
-      const title = $(el).text().trim();
+    const articles = [];
 
-      if (link && title) {
-        links.push({ link, title });
-      }
+    $("article").each((i, el) => {
+      const title = $(el).find("h3").text().trim();
+      const link = $(el).find("a").attr("href");
+      const image = $(el).find("img").attr("src");
+
+      if (!isValidArticle(title, image)) return;
+
+      articles.push({
+        title,
+        link,
+        image,
+        source: "Sport24",
+        team: detectTeam(title)
+      });
     });
 
-    console.log(`🔗 LINKS FOUND: ${source} ${links.length}`);
-
-    for (let item of links) {
-      let { link, title } = item;
-
-      if (!link.startsWith('http')) continue;
-      if (!isArticle(link, title)) continue;
-
-      const exists = await Article.findOne({ link });
-      if (exists) continue;
-
-      try {
-        const { data } = await axios.get(link);
-        const $$ = cheerio.load(data);
-
-        const image = extractImage($$);
-        const category = detectCategory(title, link);
-        const team = detectTeam(title);
-
-        await Article.create({
-          title,
-          link,
-          image,
-          source,
-          category,
-          team,
-          categories: ['ALL', category, team],
-          pubDate: new Date()
-        });
-
-        console.log(`💾 SAVED: ${title}`);
-
-      } catch (err) {
-        console.log('❌ Article error');
-      }
-    }
-
+    return articles;
   } catch (err) {
-    console.log(`❌ ${source}`);
+    console.log("Sport24 error");
+    return [];
   }
-}
+};
 
-// ================= RUN SCRAPER =================
-async function runScraper() {
-  console.log('🚀 SCRAPER START');
 
-  await scrapeSite('https://www.gazzetta.gr/', 'Gazzetta');
-  await scrapeSite('https://www.sport24.gr/', 'Sport24');
-  await scrapeSite('https://www.sport-fm.gr/', 'SportFM');
-  await scrapeSite('https://www.novasports.gr/', 'Novasports');
-  await scrapeSite('https://www.sportday.gr/', 'Sportday');
-  await scrapeSite('https://www.athletiko.gr/', 'Athletiko');
+// ================= SDNA =================
+const scrapeSDNA = async () => {
+  try {
+    const { data } = await axios.get("https://www.sdna.gr/podosfairo");
+    const $ = cheerio.load(data);
 
-  console.log('✅ SCRAPER DONE');
-}
+    const articles = [];
 
-// ================= ROUTES =================
-app.get('/articles', async (req, res) => {
-  const articles = await Article.find()
-    .sort({ pubDate: -1 })
-    .limit(100);
+    $(".node--type-article").each((i, el) => {
+      const title = $(el).find("h3").text().trim();
+      const link = "https://www.sdna.gr" + $(el).find("a").attr("href");
+      const image = $(el).find("img").attr("src");
 
-  res.json(articles);
+      if (!isValidArticle(title, image)) return;
+
+      articles.push({
+        title,
+        link,
+        image,
+        source: "SDNA",
+        team: detectTeam(title)
+      });
+    });
+
+    return articles;
+  } catch (err) {
+    console.log("SDNA error");
+    return [];
+  }
+};
+
+
+// ================= GAZZETTA =================
+const scrapeGazzetta = async () => {
+  try {
+    const { data } = await axios.get("https://www.gazzetta.gr/football");
+    const $ = cheerio.load(data);
+
+    const articles = [];
+
+    $(".teaser").each((i, el) => {
+      const title = $(el).find("h3").text().trim();
+      const link = "https://www.gazzetta.gr" + $(el).find("a").attr("href");
+      const image = $(el).find("img").attr("src");
+
+      if (!isValidArticle(title, image)) return;
+
+      articles.push({
+        title,
+        link,
+        image,
+        source: "Gazzetta",
+        team: detectTeam(title)
+      });
+    });
+
+    return articles;
+  } catch (err) {
+    console.log("Gazzetta error");
+    return [];
+  }
+};
+
+
+// ================= API =================
+app.get("/news", async (req, res) => {
+  try {
+    const [sport24, sdna, gazzetta] = await Promise.all([
+      scrapeSport24(),
+      scrapeSDNA(),
+      scrapeGazzetta()
+    ]);
+
+    const allNews = [...sport24, ...sdna, ...gazzetta];
+
+    // remove duplicates
+    const unique = Object.values(
+      allNews.reduce((acc, item) => {
+        acc[item.title] = item;
+        return acc;
+      }, {})
+    );
+
+    res.json(unique.slice(0, 50));
+  } catch (err) {
+    res.status(500).json({ error: "Something went wrong" });
+  }
 });
+
+
+// ================= FILTER BY TEAM =================
+app.get("/news/:team", async (req, res) => {
+  const team = req.params.team;
+
+  try {
+    const [sport24, sdna, gazzetta] = await Promise.all([
+      scrapeSport24(),
+      scrapeSDNA(),
+      scrapeGazzetta()
+    ]);
+
+    const allNews = [...sport24, ...sdna, ...gazzetta];
+
+    const filtered = allNews.filter(n => n.team === team);
+
+    res.json(filtered);
+  } catch (err) {
+    res.status(500).json({ error: "Error filtering" });
+  }
+});
+
 
 // ================= START =================
 app.listen(PORT, () => {
-  console.log('🌍 Server running');
-  runScraper();
+  console.log("Server running on port " + PORT);
 });
