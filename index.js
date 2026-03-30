@@ -8,6 +8,18 @@ const app = express();
 app.use(cors());
 const PORT = process.env.PORT || 3000;
 
+// ================= AXIOS CONFIG (CRITICAL FIX) =================
+const AXIOS_CONFIG = {
+  headers: {
+    "User-Agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "el-GR,el;q=0.9,en-US;q=0.8",
+  },
+  timeout: 10000,
+  maxRedirects: 5,
+};
+
 // ================= DB =================
 mongoose.connect(process.env.MONGO_URI);
 
@@ -67,7 +79,6 @@ const buildUrl = (href, base) => {
 const isArticle = (url) => {
   try {
     const u = new URL(url);
-
     return (
       u.pathname.length > 10 &&
       !u.pathname.includes("tag") &&
@@ -81,11 +92,11 @@ const isArticle = (url) => {
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ================= SCRAPER =================
-const MAX_LINKS = 40; // 🔥 IMPORTANT (μην το ανεβάσεις σε Render)
+const MAX_LINKS = 40;
 
 async function fetchArticle(url, source, sourceCategory) {
   try {
-    const res = await axios.get(url, { timeout: 10000 });
+    const res = await axios.get(url, AXIOS_CONFIG);
     const $ = cheerio.load(res.data);
 
     let title =
@@ -94,10 +105,7 @@ async function fetchArticle(url, source, sourceCategory) {
       $("title").text();
 
     if (!title) return null;
-
     title = title.trim();
-
-    // 🔥 ΠΟΛΥ ΠΙΟ ΧΑΛΑΡΟ
     if (title.length < 5) return null;
 
     let image =
@@ -127,7 +135,7 @@ async function fetchArticle(url, source, sourceCategory) {
       category: baseCategory,
       categories: Array.from(categories),
     };
-  } catch (err) {
+  } catch {
     return null;
   }
 }
@@ -136,7 +144,7 @@ async function scrape(site) {
   try {
     console.log("📡", site.name);
 
-    const res = await axios.get(site.url, { timeout: 10000 });
+    const res = await axios.get(site.url, AXIOS_CONFIG);
     const $ = cheerio.load(res.data);
 
     const links = new Set();
@@ -148,7 +156,7 @@ async function scrape(site) {
     });
 
     console.log("🔗 found links:", site.name, links.size);
-    
+
     const articles = [];
     const list = Array.from(links).slice(0, MAX_LINKS);
 
@@ -156,10 +164,10 @@ async function scrape(site) {
       const a = await fetchArticle(link, site.name, site.category);
       if (a) articles.push(a);
 
-      await delay(250); // 🔥 anti-block
+      await delay(250);
     }
 
-    console.log("✅ articles:", site.name, articles.length);
+    console.log(" articles:", site.name, articles.length);
     return articles;
   } catch (err) {
     console.log("❌", site.name, err.message);
@@ -218,9 +226,9 @@ async function run() {
   console.log("✅ DONE:", all.length);
 }
 
-// ================= START SAFE =================
+// ================= START =================
 mongoose.connection.once("open", () => {
-  console.log("✅ DB READY");
+  console.log(" DB READY");
 
   run();
   setInterval(run, 15 * 60 * 1000);
@@ -251,4 +259,4 @@ app.get("/articles", async (req, res) => {
   res.json(data);
 });
 
-app.listen(PORT, () => console.log("🌍 Server running"));
+app.listen(PORT, () => console.log(" Server running"));
