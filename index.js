@@ -26,33 +26,71 @@ const ArticleSchema = new mongoose.Schema({
 const Article = mongoose.model("Article", ArticleSchema);
 
 // ================= TEAMS =================
-const TEAMS = [
-  "ΑΕΚ","ΟΛΥΜΠΙΑΚΟΣ","ΠΑΝΑΘΗΝΑΙΚΟΣ","ΠΑΟΚ","ΑΡΗΣ",
-  "ΟΦΗ","ΒΟΛΟΣ","ΛΕΒΑΔΕΙΑΚΟΣ","ΑΤΡΟΜΗΤΟΣ","ΚΗΦΙΣΙΑ",
-  "ΠΑΝΑΙΤΩΛΙΚΟΣ","ΑΕΛ","ΠΑΝΣΕΡΑΙΚΟΣ","ΑΣΤΕΡΑΣ",
-  "ΚΑΛΑΜΑΤΑ","ΗΡΑΚΛΗΣ"
-];
+const teamKeywords = {
+  "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ","osfp","πειραι"],
+  "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην","παο","τριφυλλ"],
+  "ΑΕΚ": ["αεκ","ενωση"],
+  "ΠΑΟΚ": ["παοκ","τουμπα"],
+  "ΑΡΗΣ": ["αρη","aris"],
+  "ΟΦΗ": ["οφη"],
+  "ΒΟΛΟΣ": ["βολο"],
+  "ΛΕΒΑΔΕΙΑΚΟΣ": ["λεβαδ"],
+  "ΑΤΡΟΜΗΤΟΣ": ["ατρομη"],
+  "ΚΗΦΙΣΙΑ": ["κηφισ"],
+  "ΠΑΝΑΙΤΩΛΙΚΟΣ": ["παναιτωλ"],
+  "ΑΕΛ": ["αελ"],
+  "ΠΑΝΣΕΡΑΙΚΟΣ": ["πανσερ"],
+  "ΑΣΤΕΡΑΣ": ["αστερα"],
+  "ΚΑΛΑΜΑΤΑ": ["καλαματ"],
+  "ΗΡΑΚΛΗΣ": ["ηρακλ"]
+};
 
 const detectTeam = (title) => {
-  const t = title.toUpperCase();
-  for (let team of TEAMS) {
-    if (t.includes(team)) return team;
+  const t = title.toLowerCase();
+
+  for (let team in teamKeywords) {
+    if (teamKeywords[team].some(k => t.includes(k))) {
+      return team;
+    }
   }
+
   return "OTHER";
 };
 
-const cleanTitle = (t) => t.replace(/\s+/g, " ").trim();
+// ================= HELPERS =================
+const cleanTitle = (t) =>
+  t.replace(/\s+/g, " ").replace(/\n/g, "").trim();
+
+const getImage = (el, $) => {
+  return (
+    $(el).find("img").attr("src") ||
+    $(el).find("img").attr("data-src") ||
+    $(el).find("img").attr("srcset")?.split(" ")[0] ||
+    ""
+  );
+};
 
 const isValid = (title, image) => {
-  if (!title || title.length < 15) return false;
+  if (!title || title.length < 20) return false;
   if (!image || !image.startsWith("http")) return false;
 
-  const bad = ["video","live","gallery","photo","βαθμολογία","πρόγραμμα","market"];
+  const bad = [
+    "video",
+    "live",
+    "gallery",
+    "photo",
+    "βαθμολογία",
+    "πρόγραμμα",
+    "market",
+    "στοιχημα"
+  ];
+
   return !bad.some(w => title.toLowerCase().includes(w));
 };
 
 // ================= SCRAPERS =================
 
+// SPORT24 (FIXED)
 const scrapeSport24 = async () => {
   try {
     const { data } = await axios.get("https://www.sport24.gr/football/");
@@ -61,11 +99,11 @@ const scrapeSport24 = async () => {
     const articles = [];
 
     $("article").each((_, el) => {
-      let title = cleanTitle($(el).find("h2, h3").first().text());
+      let title = cleanTitle($(el).find("h3, h2").first().text());
       let link = $(el).find("a").attr("href");
-      let image = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
+      let image = getImage(el, $);
 
-      if (!title || !link || !image) return;
+      if (!title || !link) return;
 
       if (!link.startsWith("http")) {
         link = "https://www.sport24.gr" + link;
@@ -90,6 +128,7 @@ const scrapeSport24 = async () => {
   }
 };
 
+// SDNA (FIXED)
 const scrapeSDNA = async () => {
   try {
     const { data } = await axios.get("https://www.sdna.gr/podosfairo");
@@ -98,11 +137,11 @@ const scrapeSDNA = async () => {
     const articles = [];
 
     $("article").each((_, el) => {
-      let title = cleanTitle($(el).find("h2, h3").text());
+      let title = cleanTitle($(el).find("h3, h2").text());
       let link = $(el).find("a").attr("href");
-      let image = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
+      let image = getImage(el, $);
 
-      if (!title || !link || !image) return;
+      if (!title || !link) return;
 
       if (!link.startsWith("http")) {
         link = "https://www.sdna.gr" + link;
@@ -127,6 +166,7 @@ const scrapeSDNA = async () => {
   }
 };
 
+// GAZZETTA (FIXED - ΠΟΛΥ ΣΗΜΑΝΤΙΚΟ)
 const scrapeGazzetta = async () => {
   try {
     const { data } = await axios.get("https://www.gazzetta.gr/football");
@@ -134,12 +174,12 @@ const scrapeGazzetta = async () => {
 
     const articles = [];
 
-    $("article").each((_, el) => {
-      let title = cleanTitle($(el).find("h2, h3").text());
-      let link = $(el).find("a").attr("href");
-      let image = $(el).find("img").attr("src") || $(el).find("img").attr("data-src");
+    $("a").each((_, el) => {
+      let title = cleanTitle($(el).text());
+      let link = $(el).attr("href");
+      let image = getImage(el, $);
 
-      if (!title || !link || !image) return;
+      if (!title || !link) return;
 
       if (!link.startsWith("http")) {
         link = "https://www.gazzetta.gr" + link;
@@ -168,8 +208,9 @@ const scrapeGazzetta = async () => {
 const dedupe = (arr) => {
   const seen = new Set();
   return arr.filter(a => {
-    if (seen.has(a.title)) return false;
-    seen.add(a.title);
+    const key = a.title + a.link;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 };
@@ -177,14 +218,15 @@ const dedupe = (arr) => {
 // ================= ROUTE =================
 app.get("/articles", async (req, res) => {
   try {
-    // 1. DB FIRST
+
+    // DB FIRST
     const cached = await Article.find().sort({ pubDate: -1 }).limit(50);
 
     if (cached.length > 20) {
       return res.json(cached);
     }
 
-    // 2. SCRAPE
+    // SCRAPE
     const [s1, s2, s3] = await Promise.all([
       scrapeSport24(),
       scrapeSDNA(),
@@ -194,7 +236,7 @@ app.get("/articles", async (req, res) => {
     let all = [...s1, ...s2, ...s3];
     all = dedupe(all);
 
-    // 3. SAVE DB
+    // SAVE
     await Article.deleteMany({});
     await Article.insertMany(all);
 
