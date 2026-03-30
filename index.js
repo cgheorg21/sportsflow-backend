@@ -198,18 +198,8 @@ async function run() {
   console.log("DONE:", articles.length);
 }
 
-// ⚠️ RUN ONCE RESET DB
-// await Article.deleteMany({})
-(async () => {
-  await mongoose.connection.once("open", async () => {
-    console.log("🧨 CLEARING DB...");
-    await Article.deleteMany({});
-    console.log("✅ DB CLEARED");
-
-    run();
-    setInterval(run, 15 * 60 * 1000);
-  });
-})();
+run();
+setInterval(run, 15 * 60 * 1000);
 
 // ================= API =================
 app.get("/articles", async (req, res) => {
