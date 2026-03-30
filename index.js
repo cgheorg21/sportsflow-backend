@@ -96,7 +96,19 @@ const FEEDS = [
 app.get("/articles", async (req, res) => {
   try {
 
-    // ⚡ ΠΑΡΑΛΛΗΛΑ (BIG SPEED BOOST)
+    const now = Date.now();
+
+    // 🔥 CACHE
+    if (cache && now - lastFetchTime < CACHE_DURATION) {
+      console.log("Serving from cache");
+      return res.json(cache);
+    }
+
+    console.log("Fetching fresh data");
+
+    // =========================
+    // ⚡ PARALLEL FETCH
+    // =========================
     const feedPromises = FEEDS.map(feed =>
       axios.get(feed.url, {
         headers: { "User-Agent": "Mozilla/5.0" },
@@ -149,6 +161,19 @@ app.get("/articles", async (req, res) => {
       } catch (e) {}
     }
 
+    // =========================
+    // 🔥 SAVE CACHE
+    // =========================
+    cache = allArticles;
+    lastFetchTime = Date.now();
+
+    res.json(allArticles);
+
+  } catch (err) {
+    console.log("ERROR:", err.message);
+    res.status(500).json({ error: "Error fetching articles" });
+  }
+});
     // =======================
     // 🔥 SCRAPING (ΠΑΡΑΛΛΗΛΑ)
     // =======================
