@@ -31,18 +31,7 @@ const teamKeywords = {
   "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ"],
   "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην"],
   "ΑΕΚ": ["αεκ"],
-  "ΑΡΗΣ": ["αρη"],
-  "ΟΦΗ": ["οφη"],
-  "ΒΟΛΟΣ": ["βολο"],
-  "ΑΤΡΟΜΗΤΟΣ": ["ατρομη"],
-  "ΛΕΒΑΔΕΙΑΚΟΣ": ["λεβαδ"],
-  "ΚΗΦΙΣΙΑ": ["κηφισ"],
-  "ΠΑΝΑΙΤΩΛΙΚΟΣ": ["παναιτωλ"],
-  "ΑΕΛ": ["αελ"],
-  "ΠΑΝΣΕΡΑΙΚΟΣ": ["πανσερ"],
-  "ΑΣΤΕΡΑΣ": ["αστερα"],
-  "ΚΑΛΑΜΑΤΑ": ["καλαματ"],
-  "ΗΡΑΚΛΗΣ": ["ηρακλ"]
+  "ΑΡΗΣ": ["αρη"]
 };
 
 function detectTeam(text) {
@@ -53,11 +42,17 @@ function detectTeam(text) {
   return null;
 }
 
+// ================= CATEGORY =================
 function detectCategory(text) {
   text = text.toLowerCase();
-  if (["μπασκετ","nba","euroleague"].some(k => text.includes(k))) return "BASKET";
-  if (["ποδοσφ","super league","uefa"].some(k => text.includes(k))) return "FOOTBALL";
-  return "OTHER";
+
+  if (["μπασκετ","nba","euroleague"].some(k => text.includes(k)))
+    return "BASKET";
+
+  if (["ποδοσφ","super league","uefa"].some(k => text.includes(k)))
+    return "FOOTBALL";
+
+  return "ALL"; // 🔥 σωστό ALL
 }
 
 // ================= ARTICLE FETCH =================
@@ -73,6 +68,8 @@ async function fetchArticle(url, source) {
     const image =
       $("meta[property='og:image']").attr("content") ||
       "";
+
+    if (!title || title.length < 20) return null;
 
     const text = title + url;
 
@@ -91,8 +88,8 @@ async function fetchArticle(url, source) {
   }
 }
 
-// ================= LINK SCRAPER BASE =================
-async function scrapeLinks(url, base, match, source) {
+// ================= LINK SCRAPER =================
+async function scrapeLinks(url, base, patterns, source) {
   try {
     const res = await axios.get(url);
     const $ = cheerio.load(res.data);
@@ -102,18 +99,21 @@ async function scrapeLinks(url, base, match, source) {
     $("a").each((_, el) => {
       const href = $(el).attr("href");
 
-      if (href && match.some(m => href.includes(m))) {
-        links.add(href.startsWith("http") ? href : base + href);
-      }
+      if (!href || href.length < 30) return;
+      if (!patterns.some(p => href.includes(p))) return;
+
+      const full = href.startsWith("http") ? href : base + href;
+
+      links.add(full);
+
+      if (links.size > 60) return false;
     });
 
     const articles = [];
 
-    for (const link of Array.from(links).slice(0, 50)) {
+    for (const link of links) {
       const article = await fetchArticle(link, source);
-      if (article && article.title.length > 20) {
-        articles.push(article);
-      }
+      if (article) articles.push(article);
     }
 
     return articles;
@@ -125,6 +125,7 @@ async function scrapeLinks(url, base, match, source) {
 
 // ================= SCRAPERS =================
 
+// GAZZETTA
 const scrapeGazzetta = async () => [
   ...(await scrapeLinks(
     "https://www.gazzetta.gr/football",
@@ -140,6 +141,7 @@ const scrapeGazzetta = async () => [
   ))
 ];
 
+// SDNA
 const scrapeSDNA = async () => [
   ...(await scrapeLinks(
     "https://www.sdna.gr/podosfairo",
@@ -155,6 +157,7 @@ const scrapeSDNA = async () => [
   ))
 ];
 
+// SPORT24
 const scrapeSport24 = async () => [
   ...(await scrapeLinks(
     "https://www.sport24.gr/football",
@@ -170,6 +173,7 @@ const scrapeSport24 = async () => [
   ))
 ];
 
+// SPORTFM
 const scrapeSportFM = async () => [
   ...(await scrapeLinks(
     "https://www.sport-fm.gr/news/podosfairo",
@@ -185,6 +189,7 @@ const scrapeSportFM = async () => [
   ))
 ];
 
+// TO10
 const scrapeTo10 = async () => [
   ...(await scrapeLinks(
     "https://www.to10.gr/category/podosfero/",
@@ -200,6 +205,7 @@ const scrapeTo10 = async () => [
   ))
 ];
 
+// SPORTDAY
 const scrapeSportday = async () => [
   ...(await scrapeLinks(
     "https://sportday.gr/podosfairo",
@@ -215,6 +221,7 @@ const scrapeSportday = async () => [
   ))
 ];
 
+// ATHLETIKO
 const scrapeAthletiko = async () => [
   ...(await scrapeLinks(
     "https://www.athletiko.gr/podosfairo",
@@ -230,6 +237,7 @@ const scrapeAthletiko = async () => [
   ))
 ];
 
+// NOVASPORTS
 const scrapeNovasports = async () => [
   ...(await scrapeLinks(
     "https://www.novasports.gr/sport/podosfairo/news/",
@@ -244,9 +252,10 @@ const scrapeNovasports = async () => [
     "Novasports"
   ))
 ];
+
 // ================= ENGINE =================
 async function run() {
-  console.log("Fetching FULL...");
+  console.log("Fetching...");
 
   const results = await Promise.all([
     scrapeGazzetta(),
@@ -284,8 +293,12 @@ app.get("/articles", async (req, res) => {
   const query = {};
 
   if (team) query.team = team;
-  if (category) query.category = category;
   if (source) query.source = source;
+
+  // 🔥 ALL = ΔΕΝ φιλτράρει
+  if (category && category !== "ALL") {
+    query.category = category;
+  }
 
   const data = await Article.find(query)
     .sort({ pubDate: -1 })
