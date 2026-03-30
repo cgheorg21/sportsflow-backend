@@ -1,8 +1,8 @@
-import express from 'express';
-import mongoose from 'mongoose';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import cors from 'cors';
+const express = require('express');
+const mongoose = require('mongoose');
+const axios = require('axios');
+const cheerio = require('cheerio');
+const cors = require('cors');
 
 const app = express();
 app.use(cors());
