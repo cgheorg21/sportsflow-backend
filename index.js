@@ -67,10 +67,11 @@ const buildUrl = (href, base) => {
 const isArticle = (url) => {
   try {
     const u = new URL(url);
+
     return (
-      u.pathname.split("/").length > 2 &&
+      u.pathname.length > 10 &&
       !u.pathname.includes("tag") &&
-      !u.pathname.includes("video")
+      !u.pathname.includes("category")
     );
   } catch {
     return false;
@@ -87,11 +88,17 @@ async function fetchArticle(url, source, sourceCategory) {
     const res = await axios.get(url, { timeout: 10000 });
     const $ = cheerio.load(res.data);
 
-    const title =
+    let title =
       $("meta[property='og:title']").attr("content") ||
-      $("h1").text();
+      $("h1").first().text() ||
+      $("title").text();
 
-    if (!title || title.length < 10) return null;
+    if (!title) return null;
+
+    title = title.trim();
+
+    // 🔥 ΠΟΛΥ ΠΙΟ ΧΑΛΑΡΟ
+    if (title.length < 5) return null;
 
     let image =
       $("meta[property='og:image']").attr("content") ||
@@ -110,7 +117,7 @@ async function fetchArticle(url, source, sourceCategory) {
     categories.add(source);
 
     return {
-      title: title.trim(),
+      title,
       link: url,
       image:
         image || "https://via.placeholder.com/600x400?text=Sport",
@@ -120,7 +127,7 @@ async function fetchArticle(url, source, sourceCategory) {
       category: baseCategory,
       categories: Array.from(categories),
     };
-  } catch {
+  } catch (err) {
     return null;
   }
 }
@@ -140,6 +147,8 @@ async function scrape(site) {
       if (full && isArticle(full)) links.add(full);
     });
 
+    console.log("🔗 found links:", site.name, links.size);
+    
     const articles = [];
     const list = Array.from(links).slice(0, MAX_LINKS);
 
@@ -150,6 +159,7 @@ async function scrape(site) {
       await delay(250); // 🔥 anti-block
     }
 
+    console.log("✅ articles:", site.name, articles.length);
     return articles;
   } catch (err) {
     console.log("❌", site.name, err.message);
