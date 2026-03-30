@@ -17,12 +17,12 @@ const AXIOS_CONFIG = () => ({
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache'
   },
-  timeout: 10000
+  timeout: 15000  //  10s → 15s για αργά sites
 });
 
 // ================= DB CONNECTION =================
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
+  .then(() => console.log("MongoDB connected"))
   .catch(err => console.error("❌ DB Error:", err));
 
 // ================= MODEL =================
@@ -40,9 +40,9 @@ const Article = mongoose.model("Article", new mongoose.Schema({
 const teamMap = {
   "ΠΑΟΚ": /παοκ|δικέφαλος του βορρά|paok|τούμπα/i,
   "ΟΛΥΜΠΙΑΚΟΣ": /ολυμπιακ|θρύλος|olympiacos|olympiakos|καραϊσκάκη/i,
-  "ΠΑΝΑΘΗΝΑΙΚΟΣ": /παναθην|τριφύλλι|panathinaikos| pαο |οάκα/i,
-  "ΑΕΚ": / αεκ |δικέφαλος|aek|αγιά σοφιά/i,
-  "ΑΡΗΣ": / άρη |άρης|aris fc|βικελίδης/i
+  "ΠΑΝΑΘΗΝΑΙΚΟΣ": /παναθην|τριφύλλι|panathinaikos|pao\b|οάκα/i,
+  "ΑΕΚ": /\baek\b|δικέφαλος|αγιά σοφιά|\bαεκ\b/i,
+  "ΑΡΗΣ": /\bάρης\b|\bαρης\b|\baris\b|βικελίδης/i
 };
 
 const detectTeam = (text) => {
@@ -52,45 +52,69 @@ const detectTeam = (text) => {
   return "OTHER";
 };
 
-const detectCategory = (text, url) => {
-  const t = (text + url).toLowerCase();
-  if (t.match(/basket|μπασκετ|nba|euroleague/)) return "BASKET";
-  if (t.match(/football|ποδοσφ|superleague|uefa|podosfairo/)) return "FOOTBALL";
+//  FIX: Πλέον δέχεται και sourceUrl για να ξέρει από ποιο section ήρθε
+const detectCategory = (title, articleUrl, sourceUrl = "") => {
+  const combined = (title + " " + articleUrl + " " + sourceUrl).toLowerCase();
+  if (combined.match(/basket|μπασκετ|nba|euroleague|basketball/)) return "BASKET";
+  if (combined.match(/football|ποδοσφ|superleague|uefa|podosfairo|soccer/)) return "FOOTBALL";
   return "ALL";
 };
 
-// ================= SCRAPER: ARTICLE PAGE =================
-async function fetchArticleDetails(url, source) {
+// ================= HELPER: Safe URL builder =================
+function buildUrl(href, base) {
   try {
-    // Μικρή καθυστέρηση για αποφυγή ban
-    await new Promise(r => setTimeout(r, 600)); 
-    
+    // Αν είναι ήδη absolute URL
+    if (href.startsWith("http://") || href.startsWith("https://")) {
+      return href;
+    }
+    // Αν είναι root-relative
+    if (href.startsWith("/")) {
+      return new URL(href, base).href;
+    }
+    // Relative path
+    return new URL(href, base + "/").href;
+  } catch {
+    return null;
+  }
+}
+
+// ================= SCRAPER: ARTICLE PAGE =================
+async function fetchArticleDetails(url, source, sourceUrl) {
+  try {
+    await new Promise(r => setTimeout(r, 400)); // ⬇ 600ms → 400ms
+
     const res = await axios.get(url, AXIOS_CONFIG());
     const $ = cheerio.load(res.data);
 
-    const title = $("meta[property='og:title']").attr("content") || $("h1").first().text().trim();
-    if (!title || title.length < 20) return null;
+    const title =
+      $("meta[property='og:title']").attr("content") ||
+      $("h1").first().text().trim();
 
-    let image = $("meta[property='og:image']").attr("content") || 
-                $("meta[name='twitter:image']").attr("content") ||
-                $("article img").first().attr("src");
+    //  FIX: Χαμηλώνουμε το threshold — 10 αντί 20
+    if (!title || title.length < 10) return null;
 
-    // Fix relative image URLs
-    if (image && image.startsWith('/')) {
-        const base = new URL(url).origin;
-        image = base + image;
+    let image =
+      $("meta[property='og:image']").attr("content") ||
+      $("meta[name='twitter:image']").attr("content") ||
+      $("article img").first().attr("src") ||
+      $(".article-image img, .featured-image img, .post-thumbnail img").first().attr("src");
+
+    if (image && image.startsWith("/")) {
+      image = new URL(image, url).href;
     }
 
     return {
-      title,
+      title: title.trim(),
       link: url,
       image: image || "https://via.placeholder.com/600x400?text=Sport+News",
       pubDate: new Date(),
       source,
       team: detectTeam(title),
-      category: detectCategory(title, url)
+      //  FIX: Περνάμε και το sourceUrl
+      category: detectCategory(title, url, sourceUrl)
     };
-  } catch {
+  } catch (err) {
+    console.error(`  ⚠️ fetchArticleDetails failed: ${url} — ${err.message}`);
     return null;
   }
 }
@@ -98,56 +122,92 @@ async function fetchArticleDetails(url, source) {
 // ================= SCRAPER: LINK EXTRACTOR =================
 async function scrapeSource(site) {
   try {
-    console.log(`📡 Scraping ${site.name}...`);
+    console.log(`📡 Scraping ${site.name} (${site.url})...`);
     const res = await axios.get(site.url, AXIOS_CONFIG());
     const $ = cheerio.load(res.data);
     const links = new Set();
 
-    $("a").each((_, el) => {
-      let href = $(el).attr("href");
-      if (!href) return;
+    $("a[href]").each((_, el) => {
+      const href = $(el).attr("href");
+      if (!href || href === "#" || href.startsWith("mailto:") || href.startsWith("javascript:")) return;
 
-      const fullUrl = href.startsWith("http") ? href : site.base + (href.startsWith('/') ? '' : '/') + href;
+      //  FIX: Χρήση safe URL builder
+      const fullUrl = buildUrl(href, site.base);
+      if (!fullUrl) return;
 
-      // Φίλτρο για να μην παίρνει κατηγορίες/videos/tags
-      const isBlacklisted = ["/category/", "/videos/", "/tags/", "/author/", "/live/", "/event/"].some(b => fullUrl.includes(b));
+      const isBlacklisted = [
+        "/category/", "/videos/", "/tags/", "/author/",
+        "/live/", "/event/", "/gallery/", "/photos/", "?page="
+      ].some(b => fullUrl.includes(b));
+
       const matchesPattern = site.patterns.some(p => fullUrl.includes(p));
 
-      if (matchesPattern && !isBlacklisted && fullUrl.length > 50) {
+      //  FIX: Αφαιρούμε το length > 50 — χρησιμοποιούμε patterns μόνο
+      if (matchesPattern && !isBlacklisted) {
         links.add(fullUrl);
       }
     });
 
-    const articles = [];
-    const linkArray = Array.from(links).slice(0, 15); // Top 15 links
+    console.log(`  🔗 Found ${links.size} candidate links for ${site.name}`);
 
-    for (const link of linkArray) {
-      const details = await fetchArticleDetails(link, site.name);
-      if (details) articles.push(details);
+    const articles = [];
+    //  FIX: 15 → 25 links per source
+    const linkArray = Array.from(links).slice(0, 25);
+
+    //  FIX: Parallel fetching σε batches των 5 (5x πιο γρήγορο, χωρίς ban)
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < linkArray.length; i += BATCH_SIZE) {
+      const batch = linkArray.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(link => fetchArticleDetails(link, site.name, site.url))
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled" && r.value) articles.push(r.value);
+      }
+      // Μικρή παύση μεταξύ batches
+      if (i + BATCH_SIZE < linkArray.length) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
     }
+
     return articles;
   } catch (err) {
-    console.error(`❌ Error on ${site.name}:`, err.message);
+    console.error(`❌ Error on ${site.name} (${site.url}):`, err.message);
     return [];
   }
 }
 
-// ================= ENGINE =================
+// ================= SOURCES =================
 const sources = [
+  // Gazzetta — ξεχωριστά sections για category detection
   { name: "Gazzetta", url: "https://www.gazzetta.gr/football/superleague", base: "https://www.gazzetta.gr", patterns: ["/football/"] },
-  { name: "Gazzetta", url: "https://www.gazzetta.gr/basketball", base: "https://www.gazzetta.gr", patterns: ["/basketball/"] },
-  { name: "SDNA", url: "https://www.sdna.gr/podosfairo", base: "https://www.sdna.gr", patterns: ["/podosfairo/"] },
-  { name: "Sport24", url: "https://www.sport24.gr/football/", base: "https://www.sport24.gr", patterns: ["/football/article/"] },
-  { name: "SportFM", url: "https://www.sport-fm.gr/news/podosfairo", base: "https://www.sport-fm.gr", patterns: ["/article/"] },
-  { name: "To10", url: "https://www.to10.gr/podosfero/", base: "https://www.to10.gr", patterns: ["/podosfero/"] },
-  { name: "Sportday", url: "https://sportday.gr/podosfairo", base: "https://sportday.gr", patterns: ["/podosfairo/"] }
+  { name: "Gazzetta", url: "https://www.gazzetta.gr/basketball",           base: "https://www.gazzetta.gr", patterns: ["/basketball/"] },
+  // SDNA
+  { name: "SDNA",     url: "https://www.sdna.gr/podosfairo",               base: "https://www.sdna.gr",     patterns: ["/podosfairo/", "/article"] },
+  // Sport24
+  { name: "Sport24",  url: "https://www.sport24.gr/football/",             base: "https://www.sport24.gr",  patterns: ["/football/"] },
+  { name: "Sport24",  url: "https://www.sport24.gr/basketball/",           base: "https://www.sport24.gr",  patterns: ["/basketball/"] },
+  // SportFM
+  { name: "SportFM",  url: "https://www.sport-fm.gr/news/podosfairo",      base: "https://www.sport-fm.gr", patterns: ["/article/"] },
+  // To10
+  { name: "To10",     url: "https://www.to10.gr/podosfero/",               base: "https://www.to10.gr",     patterns: ["/podosfero/"] },
+  // Sportday
+  { name: "Sportday", url: "https://sportday.gr/podosfairo",               base: "https://sportday.gr",     patterns: ["/podosfairo/"] }
 ];
 
+// ================= ENGINE =================
 async function run() {
   console.log(`\n--- 🕒 Start: ${new Date().toLocaleTimeString()} ---`);
-  
-  for (const site of sources) {
-    const articles = await scrapeSource(site);
+
+  //  FIX: Sources τρέχουν παράλληλα μεταξύ τους (κέρδος ~3-4x ταχύτητα)
+  const allResults = await Promise.allSettled(sources.map(site => scrapeSource(site)));
+
+  let totalNew = 0;
+  for (let i = 0; i < sources.length; i++) {
+    const result = allResults[i];
+    if (result.status !== "fulfilled") continue;
+
+    const articles = result.value;
     let count = 0;
     for (const a of articles) {
       try {
@@ -155,29 +215,36 @@ async function run() {
         if (res.upsertedCount > 0) count++;
       } catch {}
     }
-    console.log(`✅ ${site.name}: ${count} new articles.`);
+    console.log(` ${sources[i].name} (${sources[i].url}): ${count} new articles`);
+    totalNew += count;
   }
+  console.log(`\n🎯 Total new articles this run: ${totalNew}`);
+  console.log(`--- ✅ Done: ${new Date().toLocaleTimeString()} ---\n`);
 }
 
-// Run engine
 run();
-setInterval(run, 15 * 60 * 1000); // Κάθε 15 λεπτά
+setInterval(run, 15 * 60 * 1000);
 
 // ================= API =================
 app.get("/articles", async (req, res) => {
-  const { team, category, source, page = 1 } = req.query;
-  const query = {};
+  try {
+    const { team, category, source, page = 1 } = req.query;
+    const query = {};
 
-  if (team) query.team = team;
-  if (source) query.source = source;
-  if (category && category !== "ALL") query.category = category;
+    if (team && team !== "ALL") query.team = team;
+    if (source) query.source = source;
+    //  FIX: "ALL" επιστρέφει ΟΛΑ — δεν φιλτράρει κατηγορία
+    if (category && category !== "ALL") query.category = category;
 
-  const data = await Article.find(query)
-    .sort({ pubDate: -1 })
-    .skip((parseInt(page) - 1) * 20)
-    .limit(20);
+    const data = await Article.find(query)
+      .sort({ pubDate: -1 })
+      .skip((parseInt(page) - 1) * 20)
+      .limit(20);
 
-  res.json(data);
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.listen(PORT, () => console.log(`🌍 Server on port ${PORT}`));
