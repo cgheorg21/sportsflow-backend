@@ -77,10 +77,14 @@ const isArticle = (url) => {
   }
 };
 
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // ================= SCRAPER =================
+const MAX_LINKS = 40; // 🔥 IMPORTANT (μην το ανεβάσεις σε Render)
+
 async function fetchArticle(url, source, sourceCategory) {
   try {
-    const res = await axios.get(url);
+    const res = await axios.get(url, { timeout: 10000 });
     const $ = cheerio.load(res.data);
 
     const title =
@@ -122,84 +126,95 @@ async function fetchArticle(url, source, sourceCategory) {
 }
 
 async function scrape(site) {
-  const res = await axios.get(site.url);
-  const $ = cheerio.load(res.data);
+  try {
+    console.log("📡", site.name);
 
-  const links = new Set();
+    const res = await axios.get(site.url, { timeout: 10000 });
+    const $ = cheerio.load(res.data);
 
-  $("a[href]").each((_, el) => {
-    const href = $(el).attr("href");
-    const full = buildUrl(href, site.base);
-    if (full && isArticle(full)) links.add(full);
-  });
+    const links = new Set();
 
-  const articles = [];
+    $("a[href]").each((_, el) => {
+      const href = $(el).attr("href");
+      const full = buildUrl(href, site.base);
+      if (full && isArticle(full)) links.add(full);
+    });
 
-  for (const link of Array.from(links).slice(0, 120)) {
-    const a = await fetchArticle(link, site.name, site.category);
-    if (a) articles.push(a);
+    const articles = [];
+    const list = Array.from(links).slice(0, MAX_LINKS);
+
+    for (const link of list) {
+      const a = await fetchArticle(link, site.name, site.category);
+      if (a) articles.push(a);
+
+      await delay(250); // 🔥 anti-block
+    }
+
+    return articles;
+  } catch (err) {
+    console.log("❌", site.name, err.message);
+    return [];
   }
-
-  return articles;
 }
 
 // ================= SOURCES =================
 const sources = [
-
-  // GAZZETTA
   { name: "Gazzetta", category: "FOOTBALL", url: "https://www.gazzetta.gr/football", base: "https://www.gazzetta.gr" },
   { name: "Gazzetta", category: "BASKET", url: "https://www.gazzetta.gr/basketball", base: "https://www.gazzetta.gr" },
 
-  // SPORT24
   { name: "Sport24", category: "FOOTBALL", url: "https://www.sport24.gr/football/", base: "https://www.sport24.gr" },
   { name: "Sport24", category: "BASKET", url: "https://www.sport24.gr/basket/", base: "https://www.sport24.gr" },
 
-  // SDNA
   { name: "SDNA", category: "FOOTBALL", url: "https://www.sdna.gr/podosfairo", base: "https://www.sdna.gr" },
   { name: "SDNA", category: "BASKET", url: "https://www.sdna.gr/mpasket", base: "https://www.sdna.gr" },
 
-  // NOVASPORTS
   { name: "Novasports", category: "FOOTBALL", url: "https://www.novasports.gr/sport/podosfairo/news/", base: "https://www.novasports.gr" },
   { name: "Novasports", category: "BASKET", url: "https://www.novasports.gr/sport/mpasket/news/", base: "https://www.novasports.gr" },
 
-  // TO10
   { name: "To10", category: "FOOTBALL", url: "https://www.to10.gr/category/podosfero/", base: "https://www.to10.gr" },
   { name: "To10", category: "BASKET", url: "https://www.to10.gr/category/basket/", base: "https://www.to10.gr" },
 
-  // ATHLETIKO
   { name: "Athletiko", category: "FOOTBALL", url: "http://athletiko.gr/podosfairo", base: "http://athletiko.gr" },
   { name: "Athletiko", category: "BASKET", url: "https://www.athletiko.gr/mpasket", base: "https://www.athletiko.gr" },
 
-  // SPORTDAY
   { name: "Sportday", category: "FOOTBALL", url: "https://sportday.gr/podosfairo", base: "https://sportday.gr" },
   { name: "Sportday", category: "BASKET", url: "https://sportday.gr/basket", base: "https://sportday.gr" },
 
-  // SPORT FM
   { name: "SportFM", category: "FOOTBALL", url: "https://www.sport-fm.gr/list/podosfairo/1", base: "https://www.sport-fm.gr" },
   { name: "SportFM", category: "BASKET", url: "https://www.sport-fm.gr/list/basket/2", base: "https://www.sport-fm.gr" },
-
 ];
 
 // ================= ENGINE =================
 async function run() {
-  console.log("RUN");
+  console.log("🚀 SCRAPER START");
 
-  const results = await Promise.all(sources.map(scrape));
-  const articles = results.flat();
+  const all = [];
 
-  for (const a of articles) {
-    await Article.findOneAndUpdate(
-      { link: a.link },
-      a,
-      { upsert: true }
-    );
+  for (const s of sources) {
+    const res = await scrape(s);
+    all.push(...res);
   }
 
-  console.log("DONE:", articles.length);
+  for (const a of all) {
+    try {
+      await Article.findOneAndUpdate(
+        { link: a.link },
+        a,
+        { upsert: true }
+      );
+    } catch {}
+  }
+
+  console.log("✅ DONE:", all.length);
 }
 
-run();
-setInterval(run, 15 * 60 * 1000);
+// ================= START SAFE =================
+mongoose.connection.once("open", () => {
+  console.log("✅ DB READY");
+
+  run();
+  setInterval(run, 15 * 60 * 1000);
+});
 
 // ================= API =================
 app.get("/articles", async (req, res) => {
@@ -226,4 +241,4 @@ app.get("/articles", async (req, res) => {
   res.json(data);
 });
 
-app.listen(PORT, () => console.log("Server ready"));
+app.listen(PORT, () => console.log("🌍 Server running"));
