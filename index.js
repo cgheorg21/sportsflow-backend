@@ -1,3 +1,6 @@
+let cache = null;
+let lastFetchTime = 0;
+const CACHE_DURATION = 2 * 60 * 1000; // 2 λεπτά
 const express = require("express");
 const axios = require("axios");
 const xml2js = require("xml2js");
