@@ -18,7 +18,18 @@ const axiosInstance = axios.create({
 });
 
 // ================= DB =================
-mongoose.connect(process.env.MONGO_URI);
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+mongoose.connection.on("error", (err) => {
+  console.log("❌ DB ERROR:", err);
+});
+
+mongoose.connection.on("connected", () => {
+  console.log("✅ DB CONNECTED");
+});
 
 const Article = mongoose.model(
   "Article",
@@ -73,11 +84,9 @@ const buildUrl = (href, base) => {
   }
 };
 
-// 🔥 ΧΑΛΑΡΟ FILTER (IMPORTANT)
 const isArticle = (url) => {
   try {
     const u = new URL(url);
-
     return (
       u.pathname.length > 10 &&
       !u.pathname.includes("category") &&
@@ -90,7 +99,7 @@ const isArticle = (url) => {
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ================= FETCH ARTICLE =================
+// ================= FETCH =================
 async function fetchArticle(url, source, sourceCategory) {
   try {
     const res = await axiosInstance.get(url);
@@ -170,7 +179,7 @@ async function scrape(site) {
     console.log("📰 ARTICLES:", site.name, articles.length);
 
     return articles;
-  } catch (err) {
+  } catch {
     console.log("❌", site.name);
     return [];
   }
@@ -225,19 +234,20 @@ async function run() {
         a,
         { upsert: true }
       );
-    } catch {}
+      console.log("💾 SAVED:", a.title);
+    } catch (e) {
+      console.log("❌ SAVE ERROR:", e.message);
+    }
   }
 
   console.log("✅ DONE:", all.length);
 }
 
-// ================= START =================
-mongoose.connection.once("open", () => {
-  console.log("✅ DB READY");
-
+// ================= START (FIXED) =================
+setTimeout(() => {
   run();
   setInterval(run, 15 * 60 * 1000);
-});
+}, 5000);
 
 // ================= API =================
 app.get("/articles", async (req, res) => {
