@@ -98,7 +98,6 @@ app.get("/articles", async (req, res) => {
 
     const now = Date.now();
 
-    // 🔥 CACHE
     if (cache && now - lastFetchTime < CACHE_DURATION) {
       console.log("Serving from cache");
       return res.json(cache);
@@ -106,9 +105,6 @@ app.get("/articles", async (req, res) => {
 
     console.log("Fetching fresh data");
 
-    // =========================
-    // ⚡ PARALLEL FETCH
-    // =========================
     const feedPromises = FEEDS.map(feed =>
       axios.get(feed.url, {
         headers: { "User-Agent": "Mozilla/5.0" },
@@ -161,9 +157,6 @@ app.get("/articles", async (req, res) => {
       } catch (e) {}
     }
 
-    // =========================
-    // 🔥 SAVE CACHE
-    // =========================
     cache = allArticles;
     lastFetchTime = Date.now();
 
@@ -174,52 +167,6 @@ app.get("/articles", async (req, res) => {
     res.status(500).json({ error: "Error fetching articles" });
   }
 });
-    // =======================
-    // 🔥 SCRAPING (ΠΑΡΑΛΛΗΛΑ)
-    // =======================
-    const [sport24, sportfm, sdna] = await Promise.all([
-      fetchSport24(),
-      fetchSportFM(),
-      fetchSDNA()
-    ]);
-
-    allArticles = allArticles.concat(sport24, sportfm, sdna);
-
-    // =======================
-    // 🔥 CLEAN
-    // =======================
-    allArticles = allArticles.filter(a =>
-      a.title &&
-      a.title.length > 20 &&
-      a.link &&
-      a.link.startsWith("http")
-    );
-
-    // =======================
-    // 🔥 DEDUP (BY LINK)
-    // =======================
-    const map = new Map();
-
-    allArticles.forEach(a => {
-      if (!map.has(a.link)) {
-        map.set(a.link, a);
-      }
-    });
-
-    allArticles = Array.from(map.values());
-
-    // =======================
-    // 🔥 SORT
-    // =======================
-    allArticles.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
-
-    res.json(allArticles);
-
-  } catch (err) {
-    res.status(500).json({ error: "Error fetching articles" });
-  }
-});
-
 // =======================
 // 🔥 SPORT24
 // =======================
