@@ -1,263 +1,209 @@
-const express = require("express");
-const axios = require("axios");
-const cors = require("cors");
-const cheerio = require("cheerio");
-const mongoose = require("mongoose");
+import express from 'express';
+import mongoose from 'mongoose';
+import axios from 'axios';
+import * as cheerio from 'cheerio';
+import cors from 'cors';
 
 const app = express();
 app.use(cors());
-const PORT = process.env.PORT || 3000;
 
-// ================= AXIOS =================
-const axiosInstance = axios.create({
-  timeout: 10000,
-  headers: {
-    "User-Agent": "Mozilla/5.0",
-    Accept: "text/html",
-  },
-});
+const PORT = process.env.PORT || 10000;
 
 // ================= DB =================
-mongoose.connect(process.env.MONGO_URI);
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log('✅ DB CONNECTED'))
+  .catch(err => console.log('❌ DB ERROR:', err));
 
-mongoose.connection.on("connected", () => {
-  console.log("✅ DB CONNECTED");
+// ================= MODEL =================
+const articleSchema = new mongoose.Schema({
+  title: String,
+  link: { type: String, unique: true },
+  image: String,
+  source: String,
+  category: String,
+  team: String,
+  categories: [String],
+  pubDate: Date
 });
 
-mongoose.connection.on("error", (err) => {
-  console.log("❌ DB ERROR:", err);
-});
+const Article = mongoose.model('Article', articleSchema);
 
-const Article = mongoose.model(
-  "Article",
-  new mongoose.Schema({
-    title: String,
-    link: { type: String, unique: true },
-    image: String,
-    pubDate: Date,
-    source: String,
-    team: String,
-    category: String,
-    categories: [String],
-  })
-);
+// ================= FILTER =================
+function isArticle(link, title) {
+  if (!link || !title) return false;
 
-// ================= HELPERS =================
-const normalize = (t = "") =>
-  t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  const badPatterns = [
+    '/tag/', '/category/', '/author/', '/teams/', '/team-sport/',
+    '/list/', '/program', '/tv', '/radio', '/app',
+    'instagram', 'facebook', 'twitter', 'youtube', 'tiktok',
+    '/match', '/league', '/cup'
+  ];
 
-const teamMap = {
-  ΠΑΟΚ: /παοκ/,
-  ΟΛΥΜΠΙΑΚΟΣ: /ολυμπιακ/,
-  ΠΑΝΑΘΗΝΑΙΚΟΣ: /παναθην/,
-  ΑΕΚ: /\bαεκ\b/,
-  ΑΡΗΣ: /αρη/,
-};
+  const badTitles = [
+    'live', 'match center', 'πρόγραμμα',
+    'βαθμολογίες', 'videos', 'highlights'
+  ];
 
-const detectTeam = (text = "") => {
-  const t = normalize(text);
-  for (const [team, regex] of Object.entries(teamMap)) {
-    if (regex.test(t)) return team;
+  const isBadLink = badPatterns.some(p => link.toLowerCase().includes(p));
+  const isBadTitle = badTitles.some(p => title.toLowerCase().includes(p));
+
+  const looksLikeArticle =
+    link.split('/').length > 5 ||
+    /\d{4}/.test(link);
+
+  return !isBadLink && !isBadTitle && looksLikeArticle;
+}
+
+// ================= CATEGORY =================
+function detectCategory(title, link) {
+  const text = (title + ' ' + link).toLowerCase();
+
+  if (
+    text.includes('basket') ||
+    text.includes('nba') ||
+    text.includes('euroleague')
+  ) {
+    return 'BASKET';
   }
+
+  return 'FOOTBALL';
+}
+
+// ================= TEAMS =================
+function detectTeam(title) {
+  const t = title.toLowerCase();
+
+  const teams = [
+    { name: "ΑΕΚ", keywords: ['αεκ'] },
+    { name: "ΟΛΥΜΠΙΑΚΟΣ", keywords: ['ολυμπιακ'] },
+    { name: "ΠΑΝΑΘΗΝΑΙΚΟΣ", keywords: ['παναθηναϊκ', 'παναθηναικ'] },
+    { name: "ΠΑΟΚ", keywords: ['παοκ'] },
+    { name: "ΑΡΗΣ", keywords: ['αρης'] },
+    { name: "ΟΦΗ", keywords: ['οφη'] },
+    { name: "ΒΟΛΟΣ", keywords: ['βολος'] },
+    { name: "ΛΕΒΑΔΕΙΑΚΟΣ", keywords: ['λεβαδειακ'] },
+    { name: "ΑΤΡΟΜΗΤΟΣ", keywords: ['ατρομητος'] },
+    { name: "ΚΗΦΙΣΙΑ", keywords: ['κηφισια'] },
+    { name: "ΠΑΝΑΙΤΩΛΙΚΟΣ", keywords: ['παναιτωλικ'] },
+    { name: "ΑΕΛ", keywords: ['αελ'] },
+    { name: "ΠΑΝΣΕΡΑΙΚΟΣ", keywords: ['πανσερραικ'] },
+    { name: "ΑΣΤΕΡΑΣ", keywords: ['αστερας'] },
+    { name: "ΚΑΛΑΜΑΤΑ", keywords: ['καλαματα'] },
+    { name: "ΗΡΑΚΛΗΣ", keywords: ['ηρακλης'] }
+  ];
+
+  for (let team of teams) {
+    if (team.keywords.some(k => t.includes(k))) {
+      return team.name;
+    }
+  }
+
   return "OTHER";
-};
+}
 
-const detectCategory = (title = "", url = "", sourceCategory) => {
-  const t = normalize(title + " " + url);
+// ================= IMAGE =================
+function extractImage($) {
+  let image =
+    $('meta[property="og:image"]').attr('content') ||
+    $('meta[name="twitter:image"]').attr('content') ||
+    $('img').first().attr('src') ||
+    '';
 
-  if (t.includes("basket") || t.includes("μπασκετ")) return "BASKET";
-  if (t.includes("football") || t.includes("ποδοσφ")) return "FOOTBALL";
-
-  return sourceCategory || "ALL";
-};
-
-const buildUrl = (href, base) => {
-  try {
-    if (!href || href.startsWith("#")) return null;
-    if (href.startsWith("http")) return href;
-    return new URL(href, base).href;
-  } catch {
-    return null;
+  if (image && image.startsWith('//')) {
+    image = 'https:' + image;
   }
-};
 
-const isArticle = (url) => {
-  try {
-    const u = new URL(url);
-
-    return (
-      u.pathname.length > 20 &&
-
-      // ❌ κόψε junk
-      !u.pathname.includes("category") &&
-      !u.pathname.includes("tag") &&
-      !u.pathname.includes("author") &&
-      !u.pathname.includes("match") &&
-      !u.pathname.includes("tv") &&
-      !u.pathname.includes("video") &&
-      !u.pathname.includes("league") &&
-      !u.pathname.includes("basket") &&
-      !u.pathname.includes("football") &&
-      !u.pathname.includes("news") &&
-
-      // ✅ ΠΡΕΠΕΙ να έχει slug άρθρου
-      u.pathname.split("/").length >= 4
-    );
-
-  } catch {
-    return false;
-  }
-};
-
-const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-
-// ================= FETCH =================
-async function fetchArticle(url, source, sourceCategory) {
-  try {
-    const res = await axiosInstance.get(url);
-    const $ = cheerio.load(res.data);
-
-    let title =
-      $("meta[property='og:title']").attr("content") ||
-      $("h1").first().text() ||
-      $("title").text();
-
-    if (!title || title.length < 5) return null;
-
-    let image =
-      $("meta[property='og:image']").attr("content") ||
-      $("img").first().attr("src");
-
-    if (image?.startsWith("//")) image = "https:" + image;
-    if (image?.startsWith("/")) image = new URL(image, url).href;
-
-    const team = detectTeam(title);
-    const baseCategory = detectCategory(title, url, sourceCategory);
-
-    const categories = new Set(["ALL"]);
-    if (baseCategory !== "ALL") categories.add(baseCategory);
-    if (team !== "OTHER") categories.add(team);
-    categories.add(source);
-
-    return {
-      title: title.trim(),
-      link: url,
-      image:
-        image || "https://via.placeholder.com/600x400?text=Sport",
-      pubDate: new Date(),
-      source,
-      team,
-      category: baseCategory,
-      categories: Array.from(categories),
-    };
-  } catch {
-    return null;
-  }
+  return image;
 }
 
 // ================= SCRAPER =================
-const MAX_LINKS = 30;
-
-async function scrape(site) {
+async function scrapeSite(url, source) {
   try {
-    console.log("📡", site.name);
+    console.log(`📡 ${source}`);
 
-    const res = await axiosInstance.get(site.url);
-    const $ = cheerio.load(res.data);
+    const { data } = await axios.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
 
-    const links = new Set();
+    const $ = cheerio.load(data);
+    const links = [];
 
-    $("a[href]").each((_, el) => {
-      const href = $(el).attr("href");
-      const full = buildUrl(href, site.base);
+    $('a').each((i, el) => {
+      const link = $(el).attr('href');
+      const title = $(el).text().trim();
 
-      if (full && isArticle(full)) {
-        links.add(full);
+      if (link && title) {
+        links.push({ link, title });
       }
     });
 
-    console.log("🔗 LINKS FOUND:", site.name, links.size);
+    console.log(`🔗 LINKS FOUND: ${source} ${links.length}`);
 
-    const list = Array.from(links).slice(0, MAX_LINKS);
+    for (let item of links) {
+      let { link, title } = item;
 
-    for (const link of list) {
-      const a = await fetchArticle(link, site.name, site.category);
+      if (!link.startsWith('http')) continue;
+      if (!isArticle(link, title)) continue;
 
-      if (a) {
-        try {
-          await Article.findOneAndUpdate(
-            { link: a.link },
-            a,
-            { upsert: true }
-          );
+      const exists = await Article.findOne({ link });
+      if (exists) continue;
 
-          console.log("💾 SAVED:", a.title);
-        } catch (e) {
-          console.log("❌ SAVE ERROR:", e.message);
-        }
+      try {
+        const { data } = await axios.get(link);
+        const $$ = cheerio.load(data);
+
+        const image = extractImage($$);
+        const category = detectCategory(title, link);
+        const team = detectTeam(title);
+
+        await Article.create({
+          title,
+          link,
+          image,
+          source,
+          category,
+          team,
+          categories: ['ALL', category, team],
+          pubDate: new Date()
+        });
+
+        console.log(`💾 SAVED: ${title}`);
+
+      } catch (err) {
+        console.log('❌ Article error');
       }
-
-      await delay(200);
     }
 
-    return [];
-  } catch {
-    console.log("❌", site.name);
-    return [];
+  } catch (err) {
+    console.log(`❌ ${source}`);
   }
 }
 
-// ================= SOURCES =================
-const sources = [
-  { name: "Gazzetta", category: "FOOTBALL", url: "https://www.gazzetta.gr/football", base: "https://www.gazzetta.gr" },
-  { name: "Gazzetta", category: "BASKET", url: "https://www.gazzetta.gr/basketball", base: "https://www.gazzetta.gr" },
+// ================= RUN SCRAPER =================
+async function runScraper() {
+  console.log('🚀 SCRAPER START');
 
-  { name: "Sport24", category: "FOOTBALL", url: "https://www.sport24.gr/football/", base: "https://www.sport24.gr" },
-  { name: "Sport24", category: "BASKET", url: "https://www.sport24.gr/basket/", base: "https://www.sport24.gr" },
+  await scrapeSite('https://www.gazzetta.gr/', 'Gazzetta');
+  await scrapeSite('https://www.sport24.gr/', 'Sport24');
+  await scrapeSite('https://www.sport-fm.gr/', 'SportFM');
+  await scrapeSite('https://www.novasports.gr/', 'Novasports');
+  await scrapeSite('https://www.sportday.gr/', 'Sportday');
+  await scrapeSite('https://www.athletiko.gr/', 'Athletiko');
 
-  { name: "SDNA", category: "FOOTBALL", url: "https://www.sdna.gr/podosfairo", base: "https://www.sdna.gr" },
-  { name: "SDNA", category: "BASKET", url: "https://www.sdna.gr/mpasket", base: "https://www.sdna.gr" },
-
-  { name: "Novasports", category: "FOOTBALL", url: "https://www.novasports.gr/sport/podosfairo/news/", base: "https://www.novasports.gr" },
-  { name: "Novasports", category: "BASKET", url: "https://www.novasports.gr/sport/mpasket/news/", base: "https://www.novasports.gr" },
-
-  { name: "To10", category: "FOOTBALL", url: "https://www.to10.gr/category/podosfero/", base: "https://www.to10.gr" },
-  { name: "To10", category: "BASKET", url: "https://www.to10.gr/category/basket/", base: "https://www.to10.gr" },
-
-  { name: "Athletiko", category: "FOOTBALL", url: "https://www.athletiko.gr/podosfairo", base: "https://www.athletiko.gr" },
-  { name: "Athletiko", category: "BASKET", url: "https://www.athletiko.gr/mpasket", base: "https://www.athletiko.gr" },
-
-  { name: "Sportday", category: "FOOTBALL", url: "https://sportday.gr/podosfairo", base: "https://sportday.gr" },
-  { name: "Sportday", category: "BASKET", url: "https://sportday.gr/basket", base: "https://sportday.gr" },
-
-  { name: "SportFM", category: "FOOTBALL", url: "https://www.sport-fm.gr/list/podosfairo/1", base: "https://www.sport-fm.gr" },
-  { name: "SportFM", category: "BASKET", url: "https://www.sport-fm.gr/list/basket/2", base: "https://www.sport-fm.gr" },
-];
-
-// ================= ENGINE =================
-async function run() {
-  console.log("🚀 SCRAPER START");
-
-  for (const s of sources) {
-    await scrape(s);
-  }
-
-  console.log("✅ RUN COMPLETE");
+  console.log('✅ SCRAPER DONE');
 }
 
-// ================= START =================
-setTimeout(() => {
-  run();
-  setInterval(run, 15 * 60 * 1000);
-}, 5000);
-
-// ================= API =================
-app.get("/articles", async (req, res) => {
-  const data = await Article.find()
+// ================= ROUTES =================
+app.get('/articles', async (req, res) => {
+  const articles = await Article.find()
     .sort({ pubDate: -1 })
     .limit(100);
 
-  res.json(data);
+  res.json(articles);
 });
 
-app.listen(PORT, () => console.log("🌍 Server running"));
+// ================= START =================
+app.listen(PORT, () => {
+  console.log('🌍 Server running');
+  runScraper();
+});
