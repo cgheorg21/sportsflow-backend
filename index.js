@@ -20,12 +20,12 @@ const axiosInstance = axios.create({
 // ================= DB =================
 mongoose.connect(process.env.MONGO_URI);
 
-mongoose.connection.on("error", (err) => {
-  console.log("❌ DB ERROR:", err);
-});
-
 mongoose.connection.on("connected", () => {
   console.log("✅ DB CONNECTED");
+});
+
+mongoose.connection.on("error", (err) => {
+  console.log("❌ DB ERROR:", err);
 });
 
 const Article = mongoose.model(
@@ -164,18 +164,28 @@ async function scrape(site) {
     console.log("🔗 LINKS FOUND:", site.name, links.size);
 
     const list = Array.from(links).slice(0, MAX_LINKS);
-    const articles = [];
 
     for (const link of list) {
       const a = await fetchArticle(link, site.name, site.category);
-      if (a) articles.push(a);
+
+      if (a) {
+        try {
+          await Article.findOneAndUpdate(
+            { link: a.link },
+            a,
+            { upsert: true }
+          );
+
+          console.log("💾 SAVED:", a.title);
+        } catch (e) {
+          console.log("❌ SAVE ERROR:", e.message);
+        }
+      }
 
       await delay(200);
     }
 
-    console.log("📰 ARTICLES:", site.name, articles.length);
-
-    return articles;
+    return [];
   } catch {
     console.log("❌", site.name);
     return [];
@@ -213,34 +223,14 @@ const sources = [
 async function run() {
   console.log("🚀 SCRAPER START");
 
-  const all = [];
-
   for (const s of sources) {
-    try {
-      const res = await scrape(s);
-      all.push(...res);
-    } catch {
-      console.log("SKIP:", s.name);
-    }
+    await scrape(s);
   }
 
-  for (const a of all) {
-    try {
-      await Article.findOneAndUpdate(
-        { link: a.link },
-        a,
-        { upsert: true }
-      );
-      console.log("💾 SAVED:", a.title);
-    } catch (e) {
-      console.log("❌ SAVE ERROR:", e.message);
-    }
-  }
-
-  console.log("✅ DONE:", all.length);
+  console.log("✅ RUN COMPLETE");
 }
 
-// ================= START (FIXED) =================
+// ================= START =================
 setTimeout(() => {
   run();
   setInterval(run, 15 * 60 * 1000);
