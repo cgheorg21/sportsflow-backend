@@ -8,14 +8,20 @@ const app = express();
 app.use(cors());
 const PORT = process.env.PORT || 3000;
 
-// ================= AXIOS CONFIG (CRITICAL FIX) =================
+// ================= GLOBAL AXIOS FIX (CRITICAL) =================
+axios.defaults.headers.common["User-Agent"] =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36";
+
+axios.defaults.headers.common["Accept"] =
+  "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+axios.defaults.headers.common["Accept-Language"] =
+  "el-GR,el;q=0.9,en-US;q=0.8";
+
+axios.defaults.headers.common["Referer"] = "https://www.google.com/";
+
+// ================= AXIOS CONFIG =================
 const AXIOS_CONFIG = {
-  headers: {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36",
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "el-GR,el;q=0.9,en-US;q=0.8",
-  },
   timeout: 10000,
   maxRedirects: 5,
 };
@@ -94,6 +100,7 @@ const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 // ================= SCRAPER =================
 const MAX_LINKS = 40;
 
+// ================= FETCH ARTICLE =================
 async function fetchArticle(url, source, sourceCategory) {
   try {
     const res = await axios.get(url, AXIOS_CONFIG);
@@ -105,8 +112,9 @@ async function fetchArticle(url, source, sourceCategory) {
       $("title").text();
 
     if (!title) return null;
+
     title = title.trim();
-    if (title.length < 5) return null;
+    if (title.length < 3) return null;
 
     let image =
       $("meta[property='og:image']").attr("content") ||
@@ -135,11 +143,12 @@ async function fetchArticle(url, source, sourceCategory) {
       category: baseCategory,
       categories: Array.from(categories),
     };
-  } catch {
+  } catch (err) {
     return null;
   }
 }
 
+// ================= SCRAPE =================
 async function scrape(site) {
   try {
     console.log("📡", site.name);
@@ -183,8 +192,8 @@ const sources = [
   { name: "Sport24", category: "FOOTBALL", url: "https://www.sport24.gr/football/", base: "https://www.sport24.gr" },
   { name: "Sport24", category: "BASKET", url: "https://www.sport24.gr/basket/", base: "https://www.sport24.gr" },
 
-  { name: "SDNA", category: "FOOTBALL", url: "https://www.sdna.gr/podosfairo", base: "https://www.sdna.gr" },
-  { name: "SDNA", category: "BASKET", url: "https://www.sdna.gr/mpasket", base: "https://www.sdna.gr" },
+  // SDNA (fallback μέσω RSS για να μην μπλοκάρει)
+  { name: "SDNA", category: "FOOTBALL", url: "https://www.sdna.gr/rss.xml", base: "https://www.sdna.gr" },
 
   { name: "Novasports", category: "FOOTBALL", url: "https://www.novasports.gr/sport/podosfairo/news/", base: "https://www.novasports.gr" },
   { name: "Novasports", category: "BASKET", url: "https://www.novasports.gr/sport/mpasket/news/", base: "https://www.novasports.gr" },
@@ -223,7 +232,7 @@ async function run() {
     } catch {}
   }
 
-  console.log("✅ DONE:", all.length);
+  console.log(" DONE:", all.length);
 }
 
 // ================= START =================
