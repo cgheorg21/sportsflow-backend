@@ -118,14 +118,35 @@ const scrapeAthletiko = async () => {
 // 🔥 SDNA (RSS)
 const scrapeSDNA = async () => {
   try {
-    const feed = await parser.parseURL("https://www.sdna.gr/rss.xml");
+    const { data } = await axios.get("https://www.sdna.gr/", {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "el-GR,el;q=0.9"
+      }
+    });
 
-    const articles = feed.items.map(item => ({
-      title: item.title,
-      link: item.link,
-      source: "SDNA",
-      pubDate: item.pubDate || new Date()
-    }));
+    const $ = cheerio.load(data);
+    const articles = [];
+
+    // 🔥 σωστό selector SDNA
+    $(".field-content a").each((_, el) => {
+      const title = clean($(el).text());
+      let link = $(el).attr("href");
+
+      if (!title || title.length < 20) return;
+      if (!link) return;
+
+      if (!link.startsWith("http")) {
+        link = "https://www.sdna.gr" + link;
+      }
+
+      articles.push({
+        title,
+        link,
+        source: "SDNA",
+        pubDate: new Date()
+      });
+    });
 
     console.log("SDNA:", articles.length);
     return articles;
@@ -139,7 +160,7 @@ const scrapeSDNA = async () => {
 // 🔥 ONSPORTS (RSS)
 const scrapeOnsports = async () => {
   try {
-    const feed = await parser.parseURL("https://www.onsports.gr/rss.xml");
+    const feed = await parser.parseURL("https://www.onsports.gr/latest-news?format=feed");
 
     const articles = feed.items.map(item => ({
       title: item.title,
@@ -237,7 +258,19 @@ const scrapeNovasports = async () => {
     return [];
   }
 };
+// ================= DEDUP =================
+  const dedupe = (arr) => {
+  const seen = new Set();
 
+  return arr.filter(a => {
+    if (!a.link) return false;
+
+    if (seen.has(a.link)) return false;
+
+    seen.add(a.link);
+    return true;
+  });
+};
 // ================= ROUTE =================
 app.get("/articles", async (req, res) => {
   try {
@@ -253,8 +286,8 @@ app.get("/articles", async (req, res) => {
       scrapeNovasports()
     ]);
 
-    const all = results.flat();
-
+    const all = dedupe(results.flat());
+    console.log("TOTAL:", all.length);
     res.json(all);
 
   } catch (err) {
