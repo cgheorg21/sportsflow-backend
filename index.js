@@ -118,43 +118,61 @@ const scrapeAthletiko = async () => {
 // 🔥 SDNA (RSS)
 const scrapeSDNA = async () => {
   try {
-    const { data } = await axios.get("https://www.sdna.gr/podosfairo", {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "el-GR,el;q=0.9,en;q=0.8",
-        "Accept":
-          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Connection": "keep-alive"
-      },
-      timeout: 10000
-    });
 
-    const $ = cheerio.load(data);
-    const articles = [];
+    const urls = [
+      "https://www.sdna.gr/news",
+      "https://www.sdna.gr/podosfairo",
+      "https://www.sdna.gr/mpasket"
+    ];
 
-    $("article").each((_, el) => {
-      const title = $(el).find("h2, h3").first().text().trim();
-      let link = $(el).find("a").attr("href");
-      const image =
-        $(el).find("img").attr("src") ||
-        $(el).find("img").attr("data-src");
+    let articles = [];
 
-      if (!title || !link) return;
+    for (const url of urls) {
 
-      if (!link.startsWith("http")) {
-        link = "https://www.sdna.gr" + link;
-      }
-
-      articles.push({
-        title,
-        link,
-        image,
-        source: "SDNA",
-        pubDate: new Date()
+      const { data } = await axios.get(url, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept-Language": "el-GR,el;q=0.9,en;q=0.8",
+          "Accept":
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+          "Referer": "https://www.google.com/"
+        },
+        timeout: 10000
       });
-    });
+
+      const $ = cheerio.load(data);
+
+      $("article").each((_, el) => {
+
+        let title = $(el).find("h2, h3").first().text().trim();
+
+        let link =
+          $(el).find("a").attr("href") ||
+          $(el).find("a").first().attr("href");
+
+        let image =
+          $(el).find("img").attr("src") ||
+          $(el).find("img").attr("data-src") ||
+          $(el).find("img").attr("data-original");
+
+        if (!title || !link) return;
+
+        if (!link.startsWith("http")) {
+          link = "https://www.sdna.gr" + link;
+        }
+
+        articles.push({
+          title,
+          link,
+          image,
+          source: "SDNA",
+          pubDate: new Date()
+        });
+      });
+
+    }
 
     console.log("SDNA:", articles.length);
 
