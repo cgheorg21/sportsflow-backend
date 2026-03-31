@@ -13,8 +13,8 @@ const PORT = process.env.PORT || 3000;
 
 // ================= DB =================
 mongoose.connect(process.env.MONGO_URI)
-.then(() => console.log("MongoDB connected"))
-.catch(err => console.log("Mongo error:", err));
+  .then(() => console.log("MongoDB connected"))
+  .catch(err => console.log("Mongo error:", err));
 
 const ArticleSchema = new mongoose.Schema({
   title: String,
@@ -88,7 +88,7 @@ const scrapeAthletiko = async () => {
 
     const articles = [];
 
-    $("article h2 a").each((_, el) => {
+    $("h3 a").each((_, el) => {
       const title = clean($(el).text());
       let link = $(el).attr("href");
 
@@ -118,36 +118,18 @@ const scrapeAthletiko = async () => {
 // 🔥 SDNA (RSS)
 const scrapeSDNA = async () => {
   try {
-    const { data } = await axios.get("https://www.sdna.gr/", {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "el-GR,el;q=0.9,en;q=0.8"
-      }
-    });
+    const feed = await parser.parseURL("https://www.sdna.gr/rss.xml");
 
-    const $ = cheerio.load(data);
-    const articles = [];
-
-    $("h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
-
-      if (!title || !link) return;
-
-      if (!link.startsWith("http")) {
-        link = "https://www.sdna.gr" + link;
-      }
-
-      articles.push({
-        title,
-        link,
-        source: "SDNA",
-        pubDate: new Date()
-      });
-    });
+    const articles = feed.items.map(item => ({
+      title: item.title,
+      link: item.link,
+      source: "SDNA",
+      pubDate: item.pubDate || new Date()
+    }));
 
     console.log("SDNA:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("SDNA ERROR", e.message);
     return [];
@@ -157,7 +139,7 @@ const scrapeSDNA = async () => {
 // 🔥 ONSPORTS (RSS)
 const scrapeOnsports = async () => {
   try {
-    const feed = await parser.parseURL("https://www.onsports.gr/rss");
+    const feed = await parser.parseURL("https://www.onsports.gr/rss.xml");
 
     const articles = feed.items.map(item => ({
       title: item.title,
@@ -168,6 +150,7 @@ const scrapeOnsports = async () => {
 
     console.log("Onsports:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("Onsports ERROR", e.message);
     return [];
@@ -177,30 +160,18 @@ const scrapeOnsports = async () => {
 // 🔥 GAZZETTA (RSS)
 const scrapeGazzetta = async () => {
   try {
-    const { data } = await axios.get("https://www.gazzetta.gr");
-    const $ = cheerio.load(data);
-    const articles = [];
+    const feed = await parser.parseURL("https://www.gazzetta.gr/rss");
 
-    $("h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
-
-      if (!title || !link) return;
-
-      if (!link.startsWith("http")) {
-        link = "https://www.gazzetta.gr" + link;
-      }
-
-      articles.push({
-        title,
-        link,
-        source: "Gazzetta",
-        pubDate: new Date()
-      });
-    });
+    const articles = feed.items.map(item => ({
+      title: item.title,
+      link: item.link,
+      source: "Gazzetta",
+      pubDate: item.pubDate || new Date()
+    }));
 
     console.log("Gazzetta:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("Gazzetta ERROR", e.message);
     return [];
@@ -250,7 +221,7 @@ const scrapeSportday = async () => {
 // 🔥 NOVASPORTS (RSS)
 const scrapeNovasports = async () => {
   try {
-    const feed = await parser.parseURL("https://www.novasports.gr/rss.xml");
+    const feed = await parser.parseURL("https://www.novasports.gr/feed/");
 
     const articles = feed.items.map(item => ({
       title: item.title,
