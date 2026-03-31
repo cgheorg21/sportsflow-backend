@@ -11,8 +11,8 @@ const PORT = process.env.PORT || 3000;
 
 // ================= DB =================
 mongoose.connect(process.env.MONGO_URI)
-.then(() => console.log("MongoDB connected"))
-.catch(err => console.log("Mongo error:", err));
+  .then(() => console.log("MongoDB connected"))
+  .catch(err => console.log(err));
 
 const ArticleSchema = new mongoose.Schema({
   title: String,
@@ -29,32 +29,46 @@ const Article = mongoose.model("Article", ArticleSchema);
 
 // ================= FEEDS =================
 const FEEDS = [
-  { url: "https://www.sport24.gr/feed/", source: "Sport24" },
-  { url: "https://www.sdna.gr/rss.xml", source: "SDNA" },
+  { url: "https://www.sport24.gr/rss.xml", source: "Sport24" },
+  { url: "https://www.sdna.gr/rss/all", source: "SDNA" },
   { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
   { url: "https://www.to10.gr/feed/", source: "To10" },
   { url: "https://sportday.gr/feed/", source: "Sportday" },
-  { url: "https://www.onsports.gr/rss", source: "Onsports" },
-  { url: "https://www.novasports.gr/rss", source: "Novasports" },
+  { url: "https://www.onsports.gr/rss.xml", source: "Onsports" },
+  { url: "https://www.novasports.gr/rss.xml", source: "Novasports" },
   { url: "https://www.athletiko.gr/feed/", source: "Athletiko" }
 ];
 
 // ================= TEAM DETECTION =================
 const teamKeywords = {
-  "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ","osfp"],
-  "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην","παο"],
-  "ΑΕΚ": ["αεκ"],
-  "ΠΑΟΚ": ["παοκ"],
-  "ΑΡΗΣ": ["αρη"],
+  "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ","osfp","πειραι"],
+  "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην","παο","τριφυλλ"],
+  "ΑΕΚ": ["αεκ","ενωση"],
+  "ΠΑΟΚ": ["παοκ","τουμπα"],
+  "ΑΡΗΣ": ["αρη","aris"],
+  "ΟΦΗ": ["οφη"],
+  "ΒΟΛΟΣ": ["βολο"],
+  "ΛΕΒΑΔΕΙΑΚΟΣ": ["λεβαδ"],
+  "ΑΤΡΟΜΗΤΟΣ": ["ατρομη"],
+  "ΚΗΦΙΣΙΑ": ["κηφισ"],
+  "ΠΑΝΑΙΤΩΛΙΚΟΣ": ["παναιτωλ"],
+  "ΑΕΛ": ["αελ"],
+  "ΠΑΝΣΕΡΑΙΚΟΣ": ["πανσερ"],
+  "ΑΣΤΕΡΑΣ": ["αστερα"],
+  "ΚΑΛΑΜΑΤΑ": ["καλαματ"],
+  "ΗΡΑΚΛΗΣ": ["ηρακλ"]
 };
+
 
 const detectTeam = (text) => {
   const t = text.toLowerCase();
+
   for (let team in teamKeywords) {
     if (teamKeywords[team].some(k => t.includes(k))) {
       return team;
     }
   }
+
   return "OTHER";
 };
 
@@ -62,35 +76,51 @@ const detectTeam = (text) => {
 const detectSport = (text) => {
   const t = text.toLowerCase();
 
-  if (t.includes("basket")) return "BASKET";
-  if (t.includes("nba")) return "BASKET";
-  if (t.includes("euroleague")) return "BASKET";
+  if (
+    t.includes("nba") ||
+    t.includes("euroleague") ||
+    t.includes("basket") ||
+    t.includes("μπάσκετ")
+  ) return "BASKET";
 
-  return "FOOTBALL"; // default
+  if (
+    t.includes("football") ||
+    t.includes("ποδοσφ") ||
+    t.includes("super league") ||
+    t.includes("champions league")
+  ) return "FOOTBALL";
+
+  return "OTHER";
 };
 
 // ================= IMAGE =================
 const extractImage = (item) => {
   return (
     item["media:content"]?.[0]?.$.url ||
+    item["media:thumbnail"]?.[0]?.$.url ||
     item.enclosure?.[0]?.$.url ||
+    item["content:encoded"]?.[0]?.match(/<img.*?src="(.*?)"/)?.[1] ||
     ""
   );
 };
 
-// ================= CATEGORIES =================
-const buildCategories = (team, source, sport) => {
-  const categories = ["ALL"];
+// ================= FILTER =================
+const isValid = (title) => {
+  if (!title || title.length < 20) return false;
 
-  if (sport) categories.push(sport);
-  if (team !== "OTHER") categories.push(team);
-  if (source) categories.push(source);
+  const bad = [
+    "lifestyle",
+    "viral",
+    "gossip",
+    "μόδα",
+    "ζώδια"
+  ];
 
-  return categories;
+  return !bad.some(w => title.toLowerCase().includes(w));
 };
 
 // ================= FETCH =================
-const fetchRSS = async (feed) => {
+const fetchFeed = async (feed) => {
   try {
     const { data } = await axios.get(feed.url, {
       headers: { "User-Agent": "Mozilla/5.0" }
@@ -100,31 +130,35 @@ const fetchRSS = async (feed) => {
     const items = parsed.rss.channel[0].item;
 
     return items.map(item => {
-
       const title = item.title?.[0] || "";
       const link = item.link?.[0] || "";
-      const pubDate = new Date(item.pubDate?.[0] || Date.now());
-      const image = extractImage(item);
 
-      const text = title + " " + link;
+      if (!isValid(title)) return null;
 
-      const sport = detectSport(text);
-      const team = detectTeam(text);
+      const sport = detectSport(title + link);
+      const team = detectTeam(title);
+
+      const categories = [
+        "ALL",
+        sport !== "OTHER" ? sport : null,
+        team !== "OTHER" ? team : null,
+        feed.source
+      ].filter(Boolean);
 
       return {
         title,
         link,
-        image,
+        image: extractImage(item),
         source: feed.source,
         sport,
         team,
-        categories: buildCategories(team, feed.source, sport),
-        pubDate
+        categories,
+        pubDate: new Date(item.pubDate?.[0] || Date.now())
       };
-    });
+    }).filter(Boolean);
 
   } catch (err) {
-    console.log(feed.source, "ERROR:", err.message);
+    console.log(feed.source, "ERROR");
     return [];
   }
 };
@@ -143,13 +177,17 @@ const dedupe = (arr) => {
 app.get("/articles", async (req, res) => {
   try {
 
-    // SCRAPE ALL
-    const results = await Promise.all(FEEDS.map(fetchRSS));
-    let all = results.flat();
+    // CACHE FIRST
+    const cached = await Article.find().sort({ pubDate: -1 }).limit(100);
+    if (cached.length > 30) return res.json(cached);
 
+    // FETCH ALL
+    const results = await Promise.all(FEEDS.map(fetchFeed));
+
+    let all = results.flat();
     all = dedupe(all);
 
-    // SAVE DB
+    // SAVE
     await Article.deleteMany({});
     await Article.insertMany(all);
 
