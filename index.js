@@ -66,11 +66,10 @@ const clean = (t) => t?.replace(/\s+/g, " ").trim();
 const extractImage = (item) => {
   return (
     item.enclosure?.url ||
-    item.enclosure?.link ||
     item["media:content"]?.url ||
     item["media:thumbnail"]?.url ||
-    (item.content?.match(/<img.*?src="(.*?)"/)?.[1]) ||
-    (item.contentSnippet?.match(/<img.*?src="(.*?)"/)?.[1]) ||
+    item.content?.match(/<img.*?src="(.*?)"/)?.[1] ||
+    item.contentSnippet?.match(/<img.*?src="(.*?)"/)?.[1] ||
     ""
   );
 };
@@ -277,6 +276,7 @@ const scrapeGazzetta = async () => {
       title: item.title,
       link: item.link,
       image: extractImage(item),
+      source: "Gazzetta",
       pubDate: item.pubDate || new Date()
     }));
 
