@@ -3,20 +3,18 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const cors = require("cors");
 const mongoose = require("mongoose");
-const Parser = require("rss-parser");
 
 const app = express();
 app.use(cors());
 
-const parser = new Parser();
 const PORT = process.env.PORT || 3000;
 
 // ================= DB =================
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB connected"))
-  .catch(err => console.log(err));
+.then(() => console.log("MongoDB connected"))
+.catch(err => console.log("Mongo error:", err));
 
-const Article = mongoose.model("Article", new mongoose.Schema({
+const ArticleSchema = new mongoose.Schema({
   title: String,
   link: String,
   image: String,
@@ -25,197 +23,316 @@ const Article = mongoose.model("Article", new mongoose.Schema({
   team: String,
   categories: [String],
   pubDate: Date
-}));
+});
 
-// ================= TEAMS =================
-const teamKeywords = {
-  "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ", "osfp", "πειραιας", "ερυθρολευκοι", "θρυλος", "λιμανι", "δαφνοστεφανωμενος"],
-  "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην", "παο", "τριφυλλι", "αθηνα", "λεωφορος", "πρασινοι", "pao"],
-  "ΑΕΚ": ["αεκ", "ενωση", "δικεφαλος", "προσφυγια", "νεα φιλαδελφεια", "κιτρινομαυροι"],
-  "ΠΑΟΚ": ["παοκ", "τουμπα", "δικεφαλος του βορρα", "ασπρομαυροι", "θυρα 4"],
-  "ΑΡΗΣ": ["αρη", "θεος του πολεμου", "κλεανθης βικελιδης", "κιτρινοι", "super 3"],
-  "ΟΦΗ": ["οφη", "κρητη", "ηρακλειο", "γεντι κουλε", "ομιλητες"],
-  "ΒΟΛΟΣ": ["βολο", "μαγνησια", "πανθεσσαλικο", "κυανερυθροι", "νεα ομαδα"],
-  "ΑΤΡΟΜΗΤΟΣ": ["ατρομη", "περιστερι", "αστερι", "κυανολευκοι", "δυτικα προαστια", "fentagin"],
-  "ΠΑΝΑΙΤΩΛΙΚΟΣ": ["παναιτωλ", "αγρινιο", "τιτορμος", "κιτρινομπλε", "καναρινια", "αιτωλοακαρνανικη"],
-  "ΑΣΤΕΡΑΣ": ["αστερα", "αρκαδια", "θεοδωρος κολοκοτρωνης", "κυανοκιτρινοι", "πελοποννησος"],
-  "ΠΑΝΣΕΡΑΙΚΟΣ": ["πανσερ", "σερρες", "λιονταρια", "κοκκινοι", "δημοτικο γηπεδο"],
-  "ΑΕΛ": ["αελ", "βασιλισσα του καμπου", "αλογακι", "θεσσαλια", "βυσσινι", "πρωταθλημα 1988"],
-  "ΚΑΛΑΜΑΤΑ": ["καλαματ", "μαυρη θυελλα", "μεσσηνια", "παραλια", "μαυροασπροι"],
-  "ΛΕΒΑΔΕΙΑΚΟΣ": ["λεβαδ", "λιβαδεια", "βοιωτια", "κομποτης", "στερεα ελλαδα"],
-  "ΚΗΦΙΣΙΑ": ["κηφισ", "βορεια προαστια", "ζηρινειο", "νεοφωτιστοι", "μπλε-ασπρο", "ανοδος"],
-  "ΗΡΑΚΛΗΣ": ["ηρακλ", "γηραιος", "καυτατζογλειο", "κυανολευκοι", "αυτονομη θυρα 10", "ιστορια"]
+const Article = mongoose.model("Article", ArticleSchema);
+
+// ================= HELPERS =================
+
+const getHTML = async (url) => {
+  const { data } = await axios.get(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept-Language": "el-GR,el;q=0.9,en;q=0.8"
+    }
+  });
+  return data;
 };
 
-const detectTeam = (text) => {
-  const t = text.toLowerCase();
-  for (let team in teamKeywords) {
-    if (teamKeywords[team].some(k => t.includes(k))) return team;
-  }
-  return null;
+const clean = (t) => t?.replace(/\s+/g, " ").trim();
+
+const getImage = ($el) => {
+  return (
+    $el.find("img").attr("src") ||
+    $el.find("img").attr("data-src") ||
+    $el.find("img").attr("data-original") ||
+    ""
+  );
 };
 
-// ================= SPORT DETECTION =================
-const detectSport = (text) => {
-  const t = text.toLowerCase();
+const fallbackImage = (img) =>
+  img && img.startsWith("http")
+    ? img
+    : "https://via.placeholder.com/600x400?text=Sports";
 
-  if (t.includes("basket") || t.includes("nba") || t.includes("euroleague") || t.includes("mpasket") || t.includes("μπασκετ"))
+// ================= SPORT =================
+
+const detectSport = (title, link) => {
+  const t = (title + link).toLowerCase();
+
+  if (t.includes("basket") || t.includes("nba") || t.includes("euroleague"))
     return "BASKET";
 
-  if (t.includes("football") || t.includes("podosfairo") || t.includes("soccer") || t.includes("uefa") || t.includes("euro") || t.includes("ποδοσφαιρο") || t.includes("μουντιαλ"))
-    return "FOOTBALL";
+  return "FOOTBALL";
+};
+
+// ================= TEAM =================
+
+const detectTeam = (title) => {
+  const t = title.toLowerCase();
+
+  if (t.includes("ολυμπιακ") || t.includes("osfp") || t.includes("πειραιας") || t.includes("ερυθρολευκοι") || t.includes("θρυλος") || t.includes("λιμανι") || t.includes("δαφνοστεφανωμενος")) return "ΟΛΥΜΠΙΑΚΟΣ";
+
+if (t.includes("παναθην") || t.includes("παο") || t.includes("τριφυλλι") || t.includes("αθηνα") || t.includes("λεωφορος") || t.includes("πρασινοι") || t.includes("pao")) return "ΠΑΝΑΘΗΝΑΙΚΟΣ";
+
+if (t.includes("αεκ") || t.includes("ενωση") || t.includes("δικεφαλος") || t.includes("προσφυγια") || t.includes("νεα φιλαδελφεια") || t.includes("κιτρινομαυροι")) return "ΑΕΚ";
+
+if (t.includes("παοκ") || t.includes("τουμπα") || t.includes("δικεφαλος του βορρα") || t.includes("ασπρομαυροι") || t.includes("θυρα 4")) return "ΠΑΟΚ";
+
+if (t.includes("αρη") || t.includes("θεος του πολεμου") || t.includes("κλεανθης βικελιδης") || t.includes("κιτρινοι") || t.includes("super 3")) return "ΑΡΗΣ";
+
+if (t.includes("οφη") || t.includes("κρητη") || t.includes("ηρακλειο") || t.includes("γεντι κουλε") || t.includes("ομιλητες")) return "ΟΦΗ";
+
+if (t.includes("βολο") || t.includes("μαγνησια") || t.includes("πανθεσσαλικο") || t.includes("κυανερυθροι") || t.includes("νεα ομαδα")) return "ΒΟΛΟΣ";
+
+if (t.includes("ατρομη") || t.includes("περιστερι") || t.includes("αστερι") || t.includes("κυανολευκοι") || t.includes("δυτικα προαστια") || t.includes("fentagin")) return "ΑΤΡΟΜΗΤΟΣ";
+
+if (t.includes("παναιτωλ") || t.includes("αγρινιο") || t.includes("τιτορμος") || t.includes("κιτρινομπλε") || t.includes("καναρινια") || t.includes("αιτωλοακαρνανικη")) return "ΠΑΝΑΙΤΩΛΙΚΟΣ";
+
+if (t.includes("αστερα") || t.includes("αρκαδια") || t.includes("θεοδωρος κολοκοτρωνης") || t.includes("κυανοκιτρινοι") || t.includes("πελοποννησος")) return "ΑΣΤΕΡΑΣ";
+
+if (t.includes("πανσερ") || t.includes("σερρες") || t.includes("λιονταρια") || t.includes("κοκκινοι") || t.includes("δημοτικο γηπεδο")) return "ΠΑΝΣΕΡΑΙΚΟΣ";
+
+if (t.includes("αελ") || t.includes("βασιλισσα του καμπου") || t.includes("αλογακι") || t.includes("θεσσαλια") || t.includes("βυσσινι") || t.includes("πρωταθλημα 1988")) return "ΑΕΛ";
+
+if (t.includes("καλαματ") || t.includes("μαυρη θυελλα") || t.includes("μεσσηνια") || t.includes("παραλια") || t.includes("μαυροασπροι")) return "ΚΑΛΑΜΑΤΑ";
+
+if (t.includes("λεβαδ") || t.includes("λιβαδεια") || t.includes("βοιωτια") || t.includes("κομποτης") || t.includes("στερεα ελλαδα")) return "ΛΕΒΑΔΕΙΑΚΟΣ";
+
+if (t.includes("κηφισ") || t.includes("βορεια προαστια") || t.includes("ζηρινειο") || t.includes("νεοφωτιστοι") || t.includes("μπλε-ασπρο") || t.includes("ανοδος")) return "ΚΗΦΙΣΙΑ";
+
+if (t.includes("ηρακλ") || t.includes("γηραιος") || t.includes("καυτατζογλειο") || t.includes("κυανολευκοι") || t.includes("αυτονομη θυρα 10") || t.includes("ιστορια")) return "ΗΡΑΚΛΗΣ";
 
   return null;
+};
+
+const buildCategories = (sport, team, source) => {
+  const c = ["ALL", sport, source];
+  if (team) c.push(team);
+  return c;
 };
 
 // ================= FILTER =================
-const isSports = (title, link) => {
-  const t = (title + link).toLowerCase();
 
-  const allowed = [
-    "basket","nba","euroleague", "mpasket", "μπασκετ", "ποδοσφαιρο",
-    "football","podosfairo","soccer",
-    "superleague","premier","liga", "uefa"
-  ];
+const isValid = (title) => {
+  if (!title || title.length < 20) return false;
 
-  return allowed.some(k => t.includes(k));
+  const bad = ["video", "live", "gallery", "photo", "στοιχημα"];
+  return !bad.some(w => title.toLowerCase().includes(w));
 };
 
-// ================= RSS =================
-const RSS_FEEDS = [
-  { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
-  { url: "https://www.to10.gr/feed/", source: "To10" },
-  { url: "https://sportday.gr/feed/", source: "Sportday" },
-  { url: "https://www.onsports.gr/rss", source: "Onsports" },
-  { url: "https://www.novasports.gr/rss", source: "Novasports" }
-];
+// ================= SCRAPERS =================
 
-// ================= RSS FETCH =================
-const fetchRSS = async () => {
-  let articles = [];
-
-  for (let feed of RSS_FEEDS) {
-    try {
-      const data = await parser.parseURL(feed.url);
-
-      data.items.forEach(item => {
-        let title = item.title || "";
-        let link = item.link || "";
-
-        let image =
-          item.enclosure?.url ||
-          item["media:content"]?.url ||
-          item.content?.match(/src="(.*?)"/)?.[1] ||
-          "";
-
-        if (!title || !link) return;
-        if (!isSports(title, link)) return;
-        if (link.includes("/plus/")) return;
-
-        const sport = detectSport(title + link);
-        if (!sport) return;
-
-        const team = detectTeam(title);
-
-        const categories = ["ALL", sport, feed.source];
-        if (team) categories.push(team);
-
-        articles.push({
-          title,
-          link,
-          image,
-          source: feed.source,
-          sport,
-          team,
-          categories,
-          pubDate: new Date(item.pubDate || Date.now())
-        });
-      });
-
-    } catch (e) {
-      console.log("RSS FAIL:", feed.source);
-    }
-  }
-
-  return articles;
-};
-
-// ================= SCRAPER (SDNA FIX) =================
-const scrapeSDNA = async () => {
+// 🔴 SPORT24
+const scrapeSport24 = async () => {
   try {
-    const { data } = await axios.get("https://www.sdna.gr/podosfairo", {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
+    const html = await getHTML("https://www.sport24.gr/football/");
+    const $ = cheerio.load(html);
 
-    const $ = cheerio.load(data);
     const articles = [];
 
     $("article").each((_, el) => {
-      let title = $(el).find("h3, h2").text().trim();
+      const title = clean($(el).find("h3, h2").first().text());
       let link = $(el).find("a").attr("href");
+      let image = fallbackImage(getImage($(el)));
 
       if (!title || !link) return;
 
-      if (!link.startsWith("http"))
-        link = "https://www.sdna.gr" + link;
+      if (!link.startsWith("http")) {
+        link = "https://www.sport24.gr" + link;
+      }
 
-      if (!isSports(title, link)) return;
+      if (!isValid(title)) return;
 
-      const sport = detectSport(title + link);
-      if (!sport) return;
-
+      const sport = detectSport(title, link);
       const team = detectTeam(title);
-
-      const categories = ["ALL", sport, "SDNA"];
-      if (team) categories.push(team);
 
       articles.push({
         title,
         link,
-        image: "",
-        source: "SDNA",
+        image,
+        source: "Sport24",
         sport,
         team,
-        categories,
+        categories: buildCategories(sport, team, "Sport24"),
         pubDate: new Date()
       });
     });
 
+    console.log("Sport24:", articles.length);
     return articles;
 
-  } catch {
-    console.log("SDNA FAIL");
+  } catch (e) {
+    console.log("Sport24 ERROR", e.message);
+    return [];
+  }
+};
+
+// 🔴 SDNA (FIX 403)
+const scrapeSDNA = async () => {
+  try {
+    const html = await getHTML("https://www.sdna.gr/podosfairo");
+    const $ = cheerio.load(html);
+
+    const articles = [];
+
+    $(".node--type-article").each((_, el) => {
+      const title = clean($(el).find("h3, h2").text());
+      let link = $(el).find("a").attr("href");
+      let image = fallbackImage(getImage($(el)));
+
+      if (!title || !link) return;
+
+      if (!link.startsWith("http")) {
+        link = "https://www.sdna.gr" + link;
+      }
+
+      if (!isValid(title)) return;
+
+      const sport = detectSport(title, link);
+      const team = detectTeam(title);
+
+      articles.push({
+        title,
+        link,
+        image,
+        source: "SDNA",
+        sport,
+        team,
+        categories: buildCategories(sport, team, "SDNA"),
+        pubDate: new Date()
+      });
+    });
+
+    console.log("SDNA:", articles.length);
+    return articles;
+
+  } catch (e) {
+    console.log("SDNA ERROR", e.message);
+    return [];
+  }
+};
+
+// 🔴 ONSPORTS
+const scrapeOnsports = async () => {
+  try {
+    const html = await getHTML("https://www.onsports.gr/");
+    const $ = cheerio.load(html);
+
+    const articles = [];
+
+    $("article").each((_, el) => {
+      const title = clean($(el).find("h3, h2").text());
+      let link = $(el).find("a").attr("href");
+      let image = fallbackImage(getImage($(el)));
+
+      if (!title || !link) return;
+
+      if (!link.startsWith("http")) {
+        link = "https://www.onsports.gr" + link;
+      }
+
+      if (!isValid(title)) return;
+
+      const sport = detectSport(title, link);
+      const team = detectTeam(title);
+
+      articles.push({
+        title,
+        link,
+        image,
+        source: "Onsports",
+        sport,
+        team,
+        categories: buildCategories(sport, team, "Onsports"),
+        pubDate: new Date()
+      });
+    });
+
+    console.log("Onsports:", articles.length);
+    return articles;
+
+  } catch (e) {
+    console.log("Onsports ERROR", e.message);
+    return [];
+  }
+};
+
+// 🔴 ATHLETIKO
+const scrapeAthletiko = async () => {
+  try {
+    const html = await getHTML("https://www.athletiko.gr/");
+    const $ = cheerio.load(html);
+
+    const articles = [];
+
+    $("article").each((_, el) => {
+      const title = clean($(el).find("h3, h2").text());
+      let link = $(el).find("a").attr("href");
+      let image = fallbackImage(getImage($(el)));
+
+      if (!title || !link) return;
+
+      if (!link.startsWith("http")) {
+        link = "https://www.athletiko.gr" + link;
+      }
+
+      if (!isValid(title)) return;
+
+      const sport = detectSport(title, link);
+      const team = detectTeam(title);
+
+      articles.push({
+        title,
+        link,
+        image,
+        source: "Athletiko",
+        sport,
+        team,
+        categories: buildCategories(sport, team, "Athletiko"),
+        pubDate: new Date()
+      });
+    });
+
+    console.log("Athletiko:", articles.length);
+    return articles;
+
+  } catch (e) {
+    console.log("Athletiko ERROR", e.message);
     return [];
   }
 };
 
 // ================= DEDUPE =================
+
 const dedupe = (arr) => {
   const seen = new Set();
   return arr.filter(a => {
-    if (seen.has(a.link)) return false;
-    seen.add(a.link);
+    const key = a.title + a.link;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 };
 
 // ================= ROUTE =================
+
 app.get("/articles", async (req, res) => {
   try {
 
     const cached = await Article.find().sort({ pubDate: -1 }).limit(100);
-
-    if (cached.length > 30) {
+    if (cached.length > 20) {
       return res.json(cached);
     }
 
-    const [rss, sdna] = await Promise.all([
-      fetchRSS(),
-      scrapeSDNA()
+    const [s1, s2, s3, s4] = await Promise.all([
+      scrapeSport24(),
+      scrapeSDNA(),
+      scrapeOnsports(),
+      scrapeAthletiko()
     ]);
 
-    let all = [...rss, ...sdna];
-
+    let all = [...s1, ...s2, ...s3, ...s4];
     all = dedupe(all);
 
     await Article.deleteMany({});
@@ -230,6 +347,7 @@ app.get("/articles", async (req, res) => {
 });
 
 // ================= START =================
+
 app.listen(PORT, () => {
   console.log("RUNNING ON " + PORT);
 });
