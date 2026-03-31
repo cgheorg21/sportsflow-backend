@@ -106,9 +106,11 @@ const extractImage = (item) => {
 // ================= FETCH RSS =================
 const fetchRSS = async (feed) => {
   try {
-    const { data } = await axios.get(feed.url);
-    const parsed = await xml2js.parseStringPromise(data);
+    const { data } = await axios.get(feed.url, {
+      headers: { "User-Agent": "Mozilla/5.0" }
+    });
 
+    const parsed = await xml2js.parseStringPromise(data);
     const items = parsed.rss.channel[0].item;
 
     return items.map(item => {
@@ -118,6 +120,14 @@ const fetchRSS = async (feed) => {
       const pubDate = new Date(item.pubDate[0]);
       const image = extractImage(item);
 
+      // ✅ FILTER
+      if (!isRelevant(title, link)) return null;
+
+      // ✅ SPORT DETECT
+      const sport = detectSport(title, link);
+
+      if (sport === "OTHER") return null;
+
       const team = detectTeam(title);
 
       return {
@@ -125,12 +135,12 @@ const fetchRSS = async (feed) => {
         link,
         image,
         source: feed.source,
-        sport: feed.sport,
+        sport,
         team,
-        categories: buildCategories(team, feed.source, feed.sport),
+        categories: buildCategories(team, feed.source, sport),
         pubDate
       };
-    });
+    }).filter(Boolean);
 
   } catch (err) {
     console.log(feed.source, "ERROR:", err.message);
