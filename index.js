@@ -15,7 +15,7 @@ mongoose.connect(process.env.MONGO_URI)
 .then(() => console.log("MongoDB connected"))
 .catch(err => console.log("Mongo error:", err));
 
-const Article = mongoose.model("Article", {
+const ArticleSchema = new mongoose.Schema({
   title: String,
   link: String,
   image: String,
@@ -26,7 +26,18 @@ const Article = mongoose.model("Article", {
   pubDate: Date
 });
 
-// ================= TEAM DETECTION =================
+const Article = mongoose.model("Article", ArticleSchema);
+
+// ================= CONFIG =================
+const RSS_SOURCES = [
+  { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
+  { url: "https://www.sdna.gr/rss.xml", source: "SDNA" },
+  { url: "https://www.to10.gr/feed/", source: "To10" },
+  { url: "https://sportday.gr/feed/", source: "Sportday" },
+  { url: "https://www.athletiko.gr/feed/", source: "Athletiko" }
+];
+
+// ================= TEAMS =================
 const teamKeywords = {
   "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ", "osfp", "πειραιας", "ερυθρολευκοι", "θρυλος", "λιμανι", "δαφνοστεφανωμενος"],
   "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην", "παο", "τριφυλλι", "αθηνα", "λεωφορος", "πρασινοι", "pao"],
@@ -46,179 +57,234 @@ const teamKeywords = {
   "ΗΡΑΚΛΗΣ": ["ηρακλ", "γηραιος", "καυτατζογλειο", "κυανολευκοι", "αυτονομη θυρα 10", "ιστορια"]
 };
 
+// ================= HELPERS =================
+const clean = (t="") => t.replace(/\s+/g, " ").trim();
+
+const detectSport = (title, link) => {
+  const t = (title + " " + link).toLowerCase();
+  if (t.includes("basket") || t.includes("nba")) return "BASKET";
+  return "FOOTBALL";
+};
+
 const detectTeam = (title) => {
   const t = title.toLowerCase();
   for (let team in teamKeywords) {
     if (teamKeywords[team].some(k => t.includes(k))) return team;
   }
-  return "OTHER";
+  return null;
 };
 
-// ================= SPORT DETECTION =================
-const detectSport = (title, link) => {
-  const t = (title + " " + link).toLowerCase();
+const buildCategories = (article) => {
+  const cats = ["ALL"];
 
-  if (t.includes("/basket")) return "BASKET";
-  if (t.includes("/podosfero")) return "FOOTBALL";
+  if (article.sport) cats.push(article.sport);
+  if (article.team) cats.push(article.team);
+  if (article.source) cats.push(article.source);
 
-  if (t.match(/μπασκετ|nba|euroleague|καε/)) return "BASKET";
-  if (t.match(/ποδοσφ|superleague|champions|league/)) return "FOOTBALL";
-
-  return "OTHER";
+  return cats;
 };
 
-// ================= CLEAN =================
-const isValid = (title) => {
-  const t = title.toLowerCase();
+// ================= FETCH RSS =================
+const fetchRSS = async (url) => {
+  const { data } = await axios.get(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "application/rss+xml"
+    },
+    timeout: 10000
+  });
 
-  const bad = [
-    "live",
-    "video",
-    "gallery",
-    "photo",
-    "στοίχημα",
-    "tv",
-    "μοντέλο",
-    "παρουσιάστρια"
-  ];
-
-  return !bad.some(w => t.includes(w));
+  return xml2js.parseStringPromise(data);
 };
 
-// ================= RSS FETCH =================
-const fetchRSS = async (url, source) => {
+const parseRSS = async (source) => {
   try {
-    const { data } = await axios.get(url, {
-      headers: { "User-Agent": "Mozilla/5.0" }
-    });
+    const json = await fetchRSS(source.url);
+    const items = json.rss.channel[0].item || [];
 
-    const parsed = await xml2js.parseStringPromise(data);
-    const items = parsed.rss.channel[0].item;
+    return items.map(item => {
+      const title = clean(item.title?.[0]);
+      const link = item.link?.[0];
 
-    return items.map(i => {
-      const title = i.title?.[0] || "";
-      const link = i.link?.[0] || "";
-
-      let image = "";
-      if (i.enclosure) image = i.enclosure[0].$.url;
-      if (!image && i["media:content"]) image = i["media:content"][0].$.url;
+      let image =
+        item["media:content"]?.[0]?.$.url ||
+        item.enclosure?.[0]?.$.url ||
+        "";
 
       const sport = detectSport(title, link);
       const team = detectTeam(title);
-
-      const categories = ["ALL", source];
-      if (sport !== "OTHER") categories.push(sport);
-      if (team !== "OTHER") categories.push(team);
 
       return {
         title,
         link,
         image,
-        source,
+        source: source.source,
         sport,
         team,
-        categories,
-        pubDate: new Date()
+        categories: buildCategories({ sport, team, source: source.source }),
+        pubDate: new Date(item.pubDate?.[0] || Date.now())
       };
-    }).filter(a => isValid(a.title));
+    });
 
-  } catch (err) {
-    console.log(source + " RSS ERROR:", err.message);
+  } catch (e) {
+    console.log(source.source, "RSS ERROR");
     return [];
   }
 };
 
-// ================= SCRAPER (fallback) =================
-const scrapeGeneric = async (url, source) => {
+// ================= SCRAPERS =================
+
+// SPORT24
+const scrapeSport24 = async () => {
   try {
-    const { data } = await axios.get(url, {
+    const { data } = await axios.get("https://www.sport24.gr/football/", {
       headers: { "User-Agent": "Mozilla/5.0" }
     });
 
     const $ = cheerio.load(data);
-    const articles = [];
+    const arr = [];
 
-    $("article, a").each((_, el) => {
-      let title = $(el).text().trim();
-      let link = $(el).attr("href");
-      let image = $(el).find("img").attr("src");
+    $("article").each((_, el) => {
+      const title = clean($(el).find("h3").text());
+      let link = $(el).find("a").attr("href");
+      const image = $(el).find("img").attr("src");
 
       if (!title || !link) return;
-      if (!link.startsWith("http")) return;
-      if (!isValid(title)) return;
+
+      if (!link.startsWith("http")) link = "https://www.sport24.gr" + link;
 
       const sport = detectSport(title, link);
       const team = detectTeam(title);
 
-      const categories = ["ALL", source];
-      if (sport !== "OTHER") categories.push(sport);
-      if (team !== "OTHER") categories.push(team);
-
-      articles.push({
+      arr.push({
         title,
         link,
         image,
-        source,
+        source: "Sport24",
         sport,
         team,
-        categories,
+        categories: buildCategories({ sport, team, source: "Sport24" }),
         pubDate: new Date()
       });
     });
 
-    return articles;
-
-  } catch (err) {
-    console.log(source + " SCRAPER ERROR:", err.message);
+    return arr;
+  } catch {
     return [];
   }
 };
 
-// ================= SOURCES =================
-const SOURCES = [
-  { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
-  { url: "https://www.to10.gr/feed/", source: "To10" },
-  { url: "https://sportday.gr/feed/", source: "Sportday" },
-  { url: "https://www.athletiko.gr/feed/", source: "Athletiko" },
+// ONSPORTS
+const scrapeOnsports = async () => {
+  try {
+    const { data } = await axios.get("https://www.onsports.gr/", {
+      headers: { "User-Agent": "Mozilla/5.0" }
+    });
 
-  { url: "https://www.sport24.gr/rss", source: "Sport24" },
-  { url: "https://www.sdna.gr/rss.xml", source: "SDNA" },
-  { url: "https://www.onsports.gr/rss/all.xml", source: "Onsports" },
-  { url: "https://www.novasports.gr/feed/", source: "Novasports" }
-];
+    const $ = cheerio.load(data);
+    const arr = [];
+
+    $("article").each((_, el) => {
+      const title = clean($(el).find("h2").text());
+      const link = $(el).find("a").attr("href");
+      const image = $(el).find("img").attr("src");
+
+      if (!title || !link) return;
+
+      const sport = detectSport(title, link);
+      const team = detectTeam(title);
+
+      arr.push({
+        title,
+        link,
+        image,
+        source: "Onsports",
+        sport,
+        team,
+        categories: buildCategories({ sport, team, source: "Onsports" }),
+        pubDate: new Date()
+      });
+    });
+
+    return arr;
+  } catch {
+    return [];
+  }
+};
+
+// NOVASPORTS
+const scrapeNova = async () => {
+  try {
+    const { data } = await axios.get("https://www.novasports.gr/", {
+      headers: { "User-Agent": "Mozilla/5.0" }
+    });
+
+    const $ = cheerio.load(data);
+    const arr = [];
+
+    $("article").each((_, el) => {
+      const title = clean($(el).find("h3").text());
+      const link = $(el).find("a").attr("href");
+      const image = $(el).find("img").attr("src");
+
+      if (!title || !link) return;
+
+      const sport = detectSport(title, link);
+      const team = detectTeam(title);
+
+      arr.push({
+        title,
+        link,
+        image,
+        source: "Novasports",
+        sport,
+        team,
+        categories: buildCategories({ sport, team, source: "Novasports" }),
+        pubDate: new Date()
+      });
+    });
+
+    return arr;
+  } catch {
+    return [];
+  }
+};
 
 // ================= ROUTE =================
 app.get("/articles", async (req, res) => {
   try {
 
+    // DB FIRST
     const cached = await Article.find().sort({ pubDate: -1 }).limit(100);
     if (cached.length > 30) return res.json(cached);
 
-    let all = [];
-
-    // RSS FIRST
+    // RSS
     const rssResults = await Promise.all(
-      SOURCES.map(s => fetchRSS(s.url, s.source))
+      RSS_SOURCES.map(parseRSS)
     );
 
-    rssResults.forEach(r => all.push(...r));
+    // SCRAPERS
+    const [sport24, onsports, nova] = await Promise.all([
+      scrapeSport24(),
+      scrapeOnsports(),
+      scrapeNova()
+    ]);
 
-    // SCRAPER fallback αν κάποιο site είναι άδειο
-    for (let s of SOURCES) {
-      const exists = all.some(a => a.source === s.source);
-      if (!exists) {
-        console.log("SCRAPING fallback:", s.source);
-        const extra = await scrapeGeneric(s.url, s.source);
-        all.push(...extra);
-      }
-    }
+    let all = [
+      ...rssResults.flat(),
+      ...sport24,
+      ...onsports,
+      ...nova
+    ];
+
+    // CLEAN EMPTY
+    all = all.filter(a => a.title && a.link);
 
     // DEDUPE
     const seen = new Set();
     all = all.filter(a => {
-      const key = a.title + a.link;
-      if (seen.has(key)) return false;
-      seen.add(key);
+      if (seen.has(a.link)) return false;
+      seen.add(a.link);
       return true;
     });
 
