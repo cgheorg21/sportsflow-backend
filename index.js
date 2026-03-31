@@ -9,6 +9,14 @@ app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
+// ================= AXIOS FIX =================
+const axiosInstance = axios.create({
+  headers: {
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "en-US,en;q=0.9"
+  }
+});
+
 // ================= DB =================
 mongoose.connect(process.env.MONGO_URI)
 .then(() => console.log("MongoDB connected"))
@@ -73,27 +81,18 @@ const getImage = (el, $) => {
 };
 
 const isValid = (title, image) => {
-  if (!title || title.length < 20) return false;
+  if (!title || title.length < 10) return false;
   if (!image || !image.startsWith("http")) return false;
 
-  const bad = [
-    "video","live","gallery","photo",
-    "βαθμολογία","πρόγραμμα","market","στοιχημα"
-  ];
-
+  const bad = ["video","live","gallery","photo"];
   return !bad.some(w => title.toLowerCase().includes(w));
 };
 
 const buildCategories = (team, source) => {
   const cats = ["ALL", "FOOTBALL"];
 
-  if (team && team !== "OTHER") {
-    cats.push(team);
-  }
-
-  if (source) {
-    cats.push(source);
-  }
+  if (team !== "OTHER") cats.push(team);
+  if (source) cats.push(source);
 
   return cats;
 };
@@ -103,16 +102,16 @@ const buildCategories = (team, source) => {
 // SPORT24
 const scrapeSport24 = async () => {
   try {
-    const { data } = await axios.get("https://www.sport24.gr/football/");
+    const { data } = await axiosInstance.get("https://www.sport24.gr/football/");
     const $ = cheerio.load(data);
 
     const articles = [];
 
-    $(".article").each((_, el) => {
+    $("article").each((_, el) => {
 
       let title = cleanTitle($(el).find("h3").first().text());
       let link = $(el).find("a").attr("href");
-      let image = $(el).find("img").attr("src");
+      let image = getImage(el, $);
 
       if (!title || !link || !image) return;
 
@@ -146,12 +145,12 @@ const scrapeSport24 = async () => {
 // SDNA
 const scrapeSDNA = async () => {
   try {
-    const { data } = await axios.get("https://www.sdna.gr/podosfairo");
+    const { data } = await axiosInstance.get("https://www.sdna.gr/podosfairo");
     const $ = cheerio.load(data);
 
     const articles = [];
 
-    $(".article").each((_, el) => {
+    $("article").each((_, el) => {
 
       let title = cleanTitle($(el).find("h3").text());
       let link = $(el).find("a").attr("href");
@@ -189,12 +188,12 @@ const scrapeSDNA = async () => {
 // GAZZETTA
 const scrapeGazzetta = async () => {
   try {
-    const { data } = await axios.get("https://www.gazzetta.gr/football");
+    const { data } = await axiosInstance.get("https://www.gazzetta.gr/football");
     const $ = cheerio.load(data);
 
     const articles = [];
 
-    $(".teaser").each((_, el) => {
+    $("article").each((_, el) => {
 
       let title = cleanTitle($(el).find("h3").text());
       let link = $(el).find("a").attr("href");
@@ -245,26 +244,29 @@ const dedupe = (arr) => {
 app.get("/articles", async (req, res) => {
   try {
 
-    // 1. DB FIRST
     const cached = await Article.find()
       .sort({ pubDate: -1 })
       .limit(50);
 
-    if (cached.length > 20) {
-      return res.json(cached);
-    }
-
-    // 2. SCRAPE
     const [s1, s2, s3] = await Promise.all([
       scrapeSport24(),
       scrapeSDNA(),
       scrapeGazzetta()
     ]);
 
+    console.log("Sport24:", s1.length);
+    console.log("SDNA:", s2.length);
+    console.log("Gazzetta:", s3.length);
+
     let all = [...s1, ...s2, ...s3];
     all = dedupe(all);
 
-    // 3. SAVE DB
+    // ❗ ΜΗΝ ΣΒΗΝΕΙΣ DB αν fail
+    if (all.length === 0) {
+      console.log("SCRAPING FAILED - RETURN CACHE");
+      return res.json(cached);
+    }
+
     await Article.deleteMany({});
     await Article.insertMany(all);
 
