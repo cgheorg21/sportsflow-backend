@@ -378,11 +378,14 @@ app.get("/articles", async (req, res) => {
       scrapeNovasports()
     ]);
 
-    const all = dedupe(results.flat()).map(a => ({
+    const all = dedupe(results.flat())
+    .map(a => ({
       ...a,
-      title: cleanTitle(a.title), // 👈 ΕΔΩ ΤΟ ΒΑΖΕΙΣ
+      title: cleanTitle(a.title),
       categories: buildCategories(a)
-    }));
+    }))
+    .sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate)); // 👈 ΕΔΩ
+
     console.log("TOTAL:", all.length);
     res.json(all);
 
