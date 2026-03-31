@@ -64,15 +64,19 @@ const getRSS = async (url) => {
 const clean = (t) => t?.replace(/\s+/g, " ").trim();
 
 const extractImage = (item) => {
-  return (
+  let image =
     item.enclosure?.url ||
     item["media:content"]?.url ||
-    item["media:thumbnail"]?.url ||
-    item.content?.match(/<img.*?src="(.*?)"/)?.[1] ||
-    item.contentSnippet?.match(/<img.*?src="(.*?)"/)?.[1] ||
-    ""
-  );
-};
+    item["media:thumbnail"]?.url;
+
+  // 🔥 GAZZETTA FIX (HTML parsing)
+  if (!image && item.content) {
+    const match = item.content.match(/<img[^>]+src="([^">]+)"/);
+    if (match) image = match[1];
+  }
+
+  return image || "";
+};  
 
 const cleanTitle = (title) => {
   if (!title) return "";
@@ -222,17 +226,24 @@ const scrapeAthletiko = async () => {
       const title = clean($(el).find("h2, h3").text());
       let link = $(el).find("a").attr("href");
 
+      if (!title || !link) return;
+
+      if (!link.startsWith("http")) {
+        link = "https://www.athletiko.gr" + link;
+      }
+
       let image =
         $(el).find("img").attr("src") ||
         $(el).find("img").attr("data-src") ||
+        $(el).find("img").attr("data-lazy-src") ||
         $(el).find("img").attr("srcset")?.split(" ")[0];
 
       articles.push({
-      title,
-      link,
-      image,
-      source: "Athletiko",
-      pubDate: new Date()
+        title,
+        link,
+        image,
+        source: "Athletiko",
+        pubDate: new Date()
       });
     });
 
