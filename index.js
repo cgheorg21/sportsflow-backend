@@ -118,23 +118,30 @@ const scrapeAthletiko = async () => {
 // 🔥 SDNA (RSS)
 const scrapeSDNA = async () => {
   try {
-    const { data } = await axios.get("https://www.sdna.gr/", {
+    const { data } = await axios.get("https://www.sdna.gr/podosfairo", {
       headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "el-GR,el;q=0.9"
-      }
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept-Language": "el-GR,el;q=0.9,en;q=0.8",
+        "Accept":
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Connection": "keep-alive"
+      },
+      timeout: 10000
     });
 
     const $ = cheerio.load(data);
     const articles = [];
 
-    // 🔥 σωστό selector SDNA
-    $(".field-content a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
+    $("article").each((_, el) => {
+      const title = $(el).find("h2, h3").first().text().trim();
+      let link = $(el).find("a").attr("href");
+      const image =
+        $(el).find("img").attr("src") ||
+        $(el).find("img").attr("data-src");
 
-      if (!title || title.length < 20) return;
-      if (!link) return;
+      if (!title || !link) return;
 
       if (!link.startsWith("http")) {
         link = "https://www.sdna.gr" + link;
@@ -143,16 +150,18 @@ const scrapeSDNA = async () => {
       articles.push({
         title,
         link,
+        image,
         source: "SDNA",
         pubDate: new Date()
       });
     });
 
     console.log("SDNA:", articles.length);
+
     return articles;
 
-  } catch (e) {
-    console.log("SDNA ERROR", e.message);
+  } catch (err) {
+    console.log("SDNA ERROR:", err.message);
     return [];
   }
 };
