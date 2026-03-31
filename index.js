@@ -75,14 +75,53 @@ const extractImage = (item) => {
   );
 };
 
+const cleanTitle = (title) => {
+  if (!title) return "";
+
+  const t = title.trim();
+
+  // κόβει διπλό τίτλο
+  const half = t.slice(0, t.length / 2);
+  if (t.endsWith(half)) return half;
+
+  return t;
+};
+
 const detectTeam = (title) => {
   const t = title.toLowerCase();
 
-  for (let team in teamKeywords) {
-    if (teamKeywords[team].some(k => t.includes(k))) {
-      return team;
-    }
-  }
+  //  ΠΡΩΤΑ τα πιο "επικίνδυνα"
+  if (t.includes("παοκ")) return "ΠΑΟΚ";
+
+  if (t.includes("παναθηναϊκ") || t.includes("παναθην")) return "ΠΑΝΑΘΗΝΑΙΚΟΣ";
+
+  if (t.includes("ολυμπιακ")) return "ΟΛΥΜΠΙΑΚΟΣ";
+
+  if (t.includes("αεκ")) return "ΑΕΚ";
+
+  if (t.includes("αρης")) return "ΑΡΗΣ";
+
+  if (t.includes("οφη")) return "ΟΦΗ";
+
+  if (t.includes("βολο")) return "ΒΟΛΟΣ";
+
+  if (t.includes("ατρομη")) return "ΑΤΡΟΜΗΤΟΣ";
+
+  if (t.includes("παναιτωλ")) return "ΠΑΝΑΙΤΩΛΙΚΟΣ";
+
+  if (t.includes("αστερα")) return "ΑΣΤΕΡΑΣ";
+
+  if (t.includes("πανσερ")) return "ΠΑΝΣΕΡΑΙΚΟΣ";
+
+  if (t.includes("αελ")) return "ΑΕΛ";
+
+  if (t.includes("καλαματ")) return "ΚΑΛΑΜΑΤΑ";
+
+  if (t.includes("λεβαδ")) return "ΛΕΒΑΔΕΙΑΚΟΣ";
+
+  if (t.includes("κηφισ")) return "ΚΗΦΙΣΙΑ";
+
+  if (t.includes("ηρακλ")) return "ΗΡΑΚΛΗΣ";
 
   return null;
 };
@@ -90,11 +129,28 @@ const detectTeam = (title) => {
 const detectSport = (title, link) => {
   const t = (title + " " + link).toLowerCase();
 
-  if (t.includes("basket") || t.includes("nba") || t.includes("euroleague")) {
-    return "BASKET";
-  }
+  //  URL FIRST (πιο reliable)
+  if (link.includes("/basket")) return "BASKET";
+  if (link.includes("/mpasket")) return "BASKET";
 
-  return "FOOTBALL";
+  if (link.includes("/football")) return "FOOTBALL";
+  if (link.includes("/podosfairo")) return "FOOTBALL";
+
+  //  fallback keywords
+  if (
+    t.includes("basket") ||
+    t.includes("nba") ||
+    t.includes("euroleague") ||
+    t.includes("μπασκετ")
+  ) return "BASKET";
+
+  if (
+    t.includes("football") ||
+    t.includes("soccer") ||
+    t.includes("ποδοσφ")
+  ) return "FOOTBALL";
+
+  return "NEWS";
 };
 
 const buildCategories = (article) => {
@@ -324,6 +380,7 @@ app.get("/articles", async (req, res) => {
 
     const all = dedupe(results.flat()).map(a => ({
       ...a,
+      title: cleanTitle(a.title), // 👈 ΕΔΩ ΤΟ ΒΑΖΕΙΣ
       categories: buildCategories(a)
     }));
     console.log("TOTAL:", all.length);
