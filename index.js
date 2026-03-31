@@ -43,6 +43,17 @@ const getRSS = async (url) => {
 
 const clean = (t) => t?.replace(/\s+/g, " ").trim();
 
+const extractImage = (item) => {
+  return (
+    item.enclosure?.url ||
+    item.enclosure?.link ||
+    item["media:content"]?.url ||
+    item["media:thumbnail"]?.url ||
+    (item.content?.match(/<img.*?src="(.*?)"/)?.[1]) ||
+    (item.contentSnippet?.match(/<img.*?src="(.*?)"/)?.[1]) ||
+    ""
+  );
+};
 // ================= SCRAPERS =================
 
 // ✅ SPORT24 (SCRAPER)
@@ -54,7 +65,7 @@ const scrapeSport24 = async () => {
     const articles = [];
 
     $("article").each((_, el) => {
-      const title = clean($(el).find("h2, h3").text());
+      const title = clean($(el).find("h2, h3").first().text());
       let link = $(el).find("a").attr("href");
 
       if (!title || !link) return;
@@ -94,20 +105,14 @@ const scrapeAthletiko = async () => {
 
     const articles = [];
 
-    $("h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
-
-      if (!title || !link) return;
-
-      if (!link.startsWith("http")) {
-        link = "https://www.athletiko.gr" + link;
-      }
+    $("article").each((_, el) => {
+      const title = clean($(el).find("h2, h3").text());
+      let link = $(el).find("a").attr("href");
 
       let image =
-      $(el).find("img").attr("src") ||
-      $(el).find("img").attr("data-src") ||
-      $(el).find("img").attr("srcset")?.split(" ")[0];
+        $(el).find("img").attr("src") ||
+        $(el).find("img").attr("data-src") ||
+        $(el).find("img").attr("srcset")?.split(" ")[0];
 
       articles.push({
       title,
@@ -135,11 +140,7 @@ const scrapeOnsports = async () => {
     const articles = feed.items.map(item => ({
     title: item.title,
     link: item.link,
-    image:
-      item.enclosure?.url ||
-      item.enclosure?.link ||
-      (item.content?.match(/<img.*?src="(.*?)"/)?.[1]) ||
-      "",
+    image: extractImage(item),
     source: "Onsports",
     pubDate: item.pubDate || new Date()
     }));
@@ -161,11 +162,7 @@ const scrapeGazzetta = async () => {
     const articles = feed.items.map(item => ({
       title: item.title,
       link: item.link,
-      image:
-        item.enclosure?.url ||
-        (item.content?.match(/<img.*?src="(.*?)"/)?.[1]) ||
-        "",
-      source: "Gazzetta",
+      image: extractImage(item),
       pubDate: item.pubDate || new Date()
     }));
 
@@ -187,7 +184,7 @@ const scrapeTo10 = async () => {
       title: item.title,
       link: item.link,
       source: "To10",
-      image: item.enclosure?.url || item.enclosure?.link || "",
+      image: extractImage(item),
       pubDate: item.pubDate || new Date()
     }));
 
@@ -208,7 +205,7 @@ const scrapeSportday = async () => {
       title: item.title,
       link: item.link,
       source: "Sportday",
-      image: item.enclosure?.url || "",
+      image: extractImage(item),
       pubDate: item.pubDate || new Date()
     }));
 
@@ -229,7 +226,7 @@ const scrapeNovasports = async () => {
       title: item.title,
       link: item.link,
       source: "Novasports",
-      image: item.enclosure?.url || "",
+      image: extractImage(item),
       pubDate: item.pubDate || new Date()
     }));
 
