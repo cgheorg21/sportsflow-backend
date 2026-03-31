@@ -1,96 +1,71 @@
 const express = require("express");
 const axios = require("axios");
-const cors = require("cors");
-const mongoose = require("mongoose");
 const xml2js = require("xml2js");
+const cors = require("cors");
 
 const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
-// ================= DB =================
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB connected"))
-  .catch(err => console.log(err));
-
-const ArticleSchema = new mongoose.Schema({
-  title: String,
-  link: String,
-  image: String,
-  source: String,
-  sport: String,
-  team: String,
-  categories: [String],
-  pubDate: Date
-});
-
-const Article = mongoose.model("Article", ArticleSchema);
-
-// ================= FEEDS =================
-const FEEDS = [
-  { url: "https://www.sport24.gr/rss.xml", source: "Sport24" },
-  { url: "https://www.sdna.gr/rss/all", source: "SDNA" },
-  { url: "https://www.gazzetta.gr/rss", source: "Gazzetta" },
-  { url: "https://www.to10.gr/feed/", source: "To10" },
-  { url: "https://sportday.gr/feed/", source: "Sportday" },
-  { url: "https://www.onsports.gr/rss.xml", source: "Onsports" },
-  { url: "https://www.novasports.gr/rss.xml", source: "Novasports" },
-  { url: "https://www.athletiko.gr/feed/", source: "Athletiko" }
-];
-
-// ================= TEAM DETECTION =================
+// ================= TEAMS =================
 const teamKeywords = {
-  "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ","osfp","πειραι"],
-  "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην","παο","τριφυλλ"],
-  "ΑΕΚ": ["αεκ","ενωση"],
-  "ΠΑΟΚ": ["παοκ","τουμπα"],
-  "ΑΡΗΣ": ["αρη","aris"],
+  "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ","osfp"],
+  "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην","παο"],
+  "ΑΕΚ": ["αεκ"],
+  "ΠΑΟΚ": ["παοκ"],
+  "ΑΡΗΣ": ["αρη"],
   "ΟΦΗ": ["οφη"],
   "ΒΟΛΟΣ": ["βολο"],
-  "ΛΕΒΑΔΕΙΑΚΟΣ": ["λεβαδ"],
   "ΑΤΡΟΜΗΤΟΣ": ["ατρομη"],
-  "ΚΗΦΙΣΙΑ": ["κηφισ"],
   "ΠΑΝΑΙΤΩΛΙΚΟΣ": ["παναιτωλ"],
-  "ΑΕΛ": ["αελ"],
-  "ΠΑΝΣΕΡΑΙΚΟΣ": ["πανσερ"],
   "ΑΣΤΕΡΑΣ": ["αστερα"],
+  "ΠΑΝΣΕΡΑΙΚΟΣ": ["πανσερ"],
+  "ΑΕΛ": ["αελ"],
   "ΚΑΛΑΜΑΤΑ": ["καλαματ"],
   "ΗΡΑΚΛΗΣ": ["ηρακλ"]
 };
 
-
-const detectTeam = (text) => {
-  const t = text.toLowerCase();
-
+const detectTeam = (title) => {
+  const t = title.toLowerCase();
   for (let team in teamKeywords) {
-    if (teamKeywords[team].some(k => t.includes(k))) {
-      return team;
-    }
+    if (teamKeywords[team].some(k => t.includes(k))) return team;
   }
-
   return "OTHER";
 };
 
 // ================= SPORT DETECTION =================
-const detectSport = (text) => {
-  const t = text.toLowerCase();
+const detectSport = (title, link) => {
+  const text = (title + " " + link).toLowerCase();
 
   if (
-    t.includes("nba") ||
-    t.includes("euroleague") ||
-    t.includes("basket") ||
-    t.includes("μπάσκετ")
+    text.includes("basket") ||
+    text.includes("nba") ||
+    text.includes("euroleague") ||
+    text.includes("μπάσκετ")
   ) return "BASKET";
 
   if (
-    t.includes("football") ||
-    t.includes("ποδοσφ") ||
-    t.includes("super league") ||
-    t.includes("champions league")
+    text.includes("podosfero") ||
+    text.includes("football") ||
+    text.includes("superleague") ||
+    text.includes("champions") ||
+    text.includes("ποδοσφ")
   ) return "FOOTBALL";
 
   return "OTHER";
+};
+
+// ================= FILTER =================
+const isValid = (title) => {
+  const t = title.toLowerCase();
+
+  const bad = [
+    "lifestyle","gossip","viral","video","tv",
+    "έγκλημα","σοκ","τροχαίο","πολιτική"
+  ];
+
+  return !bad.some(w => t.includes(w));
 };
 
 // ================= IMAGE =================
@@ -99,25 +74,31 @@ const extractImage = (item) => {
     item["media:content"]?.[0]?.$.url ||
     item["media:thumbnail"]?.[0]?.$.url ||
     item.enclosure?.[0]?.$.url ||
-    item["content:encoded"]?.[0]?.match(/<img.*?src="(.*?)"/)?.[1] ||
+    item.description?.[0]?.match(/<img.*?src="(.*?)"/)?.[1] ||
     ""
   );
 };
 
-// ================= FILTER =================
-const isValid = (title) => {
-  if (!title || title.length < 20) return false;
+// ================= RSS SOURCES =================
+const FEEDS = [
+  // FOOTBALL
+  { url: "https://www.sport24.gr/rss/podosfairo", source: "Sport24" },
+  { url: "https://www.sdna.gr/rss/podosfairo", source: "SDNA" },
+  { url: "https://www.gazzetta.gr/football/rss", source: "Gazzetta" },
+  { url: "https://www.to10.gr/category/podosfero/feed/", source: "To10" },
 
-  const bad = [
-    "lifestyle",
-    "viral",
-    "gossip",
-    "μόδα",
-    "ζώδια"
-  ];
+  // BASKET
+  { url: "https://www.sport24.gr/rss/basket", source: "Sport24" },
+  { url: "https://www.sdna.gr/rss/basket", source: "SDNA" },
+  { url: "https://www.gazzetta.gr/basketball/rss", source: "Gazzetta" },
+  { url: "https://www.to10.gr/category/basket/feed/", source: "To10" },
 
-  return !bad.some(w => title.toLowerCase().includes(w));
-};
+  // GENERAL
+  { url: "https://sportday.gr/feed/", source: "Sportday" },
+  { url: "https://www.onsports.gr/rss", source: "Onsports" },
+  { url: "https://www.novasports.gr/rss.xml", source: "Novasports" },
+  { url: "https://www.athletiko.gr/feed/", source: "Athletiko" }
+];
 
 // ================= FETCH =================
 const fetchFeed = async (feed) => {
@@ -132,23 +113,22 @@ const fetchFeed = async (feed) => {
     return items.map(item => {
       const title = item.title?.[0] || "";
       const link = item.link?.[0] || "";
+      const image = extractImage(item);
 
       if (!isValid(title)) return null;
 
-      const sport = detectSport(title + link);
+      const sport = detectSport(title, link);
       const team = detectTeam(title);
 
-      const categories = [
-        "ALL",
-        sport !== "OTHER" ? sport : null,
-        team !== "OTHER" ? team : null,
-        feed.source
-      ].filter(Boolean);
+      let categories = ["ALL", feed.source];
+
+      if (sport !== "OTHER") categories.push(sport);
+      if (team !== "OTHER") categories.push(team);
 
       return {
         title,
         link,
-        image: extractImage(item),
+        image,
         source: feed.source,
         sport,
         team,
@@ -158,45 +138,29 @@ const fetchFeed = async (feed) => {
     }).filter(Boolean);
 
   } catch (err) {
-    console.log(feed.source, "ERROR");
+    console.log(feed.source + " ERROR");
     return [];
   }
 };
 
-// ================= DEDUPE =================
-const dedupe = (arr) => {
+// ================= ROUTE =================
+app.get("/articles", async (req, res) => {
+
+  const results = await Promise.all(FEEDS.map(fetchFeed));
+  let all = results.flat();
+
+  // dedupe
   const seen = new Set();
-  return arr.filter(a => {
+  all = all.filter(a => {
     if (seen.has(a.link)) return false;
     seen.add(a.link);
     return true;
   });
-};
 
-// ================= ROUTE =================
-app.get("/articles", async (req, res) => {
-  try {
+  // sort newest first
+  all.sort((a, b) => new Date(b.pubDate) - new Date(a.pubDate));
 
-    // CACHE FIRST
-    const cached = await Article.find().sort({ pubDate: -1 }).limit(100);
-    if (cached.length > 30) return res.json(cached);
-
-    // FETCH ALL
-    const results = await Promise.all(FEEDS.map(fetchFeed));
-
-    let all = results.flat();
-    all = dedupe(all);
-
-    // SAVE
-    await Article.deleteMany({});
-    await Article.insertMany(all);
-
-    res.json(all);
-
-  } catch (err) {
-    console.log(err);
-    res.status(500).json({ error: "FAILED" });
-  }
+  res.json(all);
 });
 
 // ================= START =================
