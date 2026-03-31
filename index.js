@@ -2,30 +2,48 @@ const express = require("express");
 const axios = require("axios");
 const cheerio = require("cheerio");
 const cors = require("cors");
+const mongoose = require("mongoose");
 
 const app = express();
 app.use(cors());
 
 const PORT = process.env.PORT || 3000;
 
+// ================= DB =================
+mongoose.connect(process.env.MONGO_URI)
+.then(() => console.log("MongoDB connected"))
+.catch(err => console.log("Mongo error:", err));
+
+const ArticleSchema = new mongoose.Schema({
+  title: String,
+  link: String,
+  image: String,
+  source: String,
+  pubDate: Date
+});
+
+const Article = mongoose.model("Article", ArticleSchema);
+
 // ================= HELPERS =================
 const getHTML = async (url) => {
   const { data } = await axios.get(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0",
-      "Accept-Language": "el-GR,el;q=0.9"
+      "User-Agent": "Mozilla/5.0"
     }
   });
   return data;
 };
 
-const clean = (t) => t?.replace(/\s+/g, " ").trim();
+const getRSS = async (url) => {
+  const { data } = await axios.get(url);
+  return cheerio.load(data, { xmlMode: true });
+};
 
-const isValid = (title) => title && title.length > 15;
+const clean = (t) => t?.replace(/\s+/g, " ").trim();
 
 // ================= SCRAPERS =================
 
-// 1️⃣ SPORT24
+// ✅ SPORT24 (SCRAPER)
 const scrapeSport24 = async () => {
   try {
     const html = await getHTML("https://www.sport24.gr/");
@@ -38,22 +56,29 @@ const scrapeSport24 = async () => {
       let link = $(el).find("a").attr("href");
 
       if (!title || !link) return;
-      if (!link.startsWith("http")) link = "https://www.sport24.gr" + link;
 
-      if (!isValid(title)) return;
+      if (!link.startsWith("http")) {
+        link = "https://www.sport24.gr" + link;
+      }
 
-      articles.push({ title, link, source: "Sport24" });
+      articles.push({
+        title,
+        link,
+        source: "Sport24",
+        pubDate: new Date()
+      });
     });
 
     console.log("Sport24:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("Sport24 ERROR", e.message);
     return [];
   }
 };
 
-// 2️⃣ ATHLETIKO
+// ✅ ATHLETIKO (SCRAPER)
 const scrapeAthletiko = async () => {
   try {
     const html = await getHTML("https://www.athletiko.gr/");
@@ -66,173 +91,192 @@ const scrapeAthletiko = async () => {
       let link = $(el).attr("href");
 
       if (!title || !link) return;
-      if (!link.startsWith("http")) link = "https://www.athletiko.gr" + link;
 
-      articles.push({ title, link, source: "Athletiko" });
+      if (!link.startsWith("http")) {
+        link = "https://www.athletiko.gr" + link;
+      }
+
+      articles.push({
+        title,
+        link,
+        source: "Athletiko",
+        pubDate: new Date()
+      });
     });
 
     console.log("Athletiko:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("Athletiko ERROR", e.message);
     return [];
   }
 };
 
-// 3️⃣ SDNA (403 FIX)
+// 🔥 SDNA (RSS)
 const scrapeSDNA = async () => {
   try {
-    const html = await axios.get("https://www.sdna.gr/", {
-      headers: {
-        "User-Agent": "Mozilla/5.0",
-        "Referer": "https://google.com"
-      }
-    }).then(r => r.data);
+    const $ = await getRSS("https://www.sdna.gr/rss.xml");
 
-    const $ = cheerio.load(html);
     const articles = [];
 
-    $("h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
+    $("item").each((_, el) => {
+      const title = clean($(el).find("title").text());
+      const link = $(el).find("link").text();
+      const image = $(el).find("enclosure").attr("url");
 
-      if (!title || !link) return;
-      if (!link.startsWith("http")) link = "https://www.sdna.gr" + link;
-
-      articles.push({ title, link, source: "SDNA" });
+      articles.push({
+        title,
+        link,
+        image,
+        source: "SDNA",
+        pubDate: new Date()
+      });
     });
 
     console.log("SDNA:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("SDNA ERROR", e.message);
     return [];
   }
 };
 
-// 4️⃣ ONSPORTS
+// 🔥 ONSPORTS (RSS)
 const scrapeOnsports = async () => {
   try {
-    const html = await getHTML("https://www.onsports.gr/");
-    const $ = cheerio.load(html);
+    const $ = await getRSS("https://www.onsports.gr/rss");
 
     const articles = [];
 
-    $("h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
+    $("item").each((_, el) => {
+      const title = clean($(el).find("title").text());
+      const link = $(el).find("link").text();
 
-      if (!title || !link) return;
-      if (!link.startsWith("http")) link = "https://www.onsports.gr" + link;
-
-      articles.push({ title, link, source: "Onsports" });
+      articles.push({
+        title,
+        link,
+        source: "Onsports",
+        pubDate: new Date()
+      });
     });
 
     console.log("Onsports:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("Onsports ERROR", e.message);
     return [];
   }
 };
 
-// 5️⃣ GAZZETTA
+// 🔥 GAZZETTA (RSS)
 const scrapeGazzetta = async () => {
   try {
-    const html = await getHTML("https://www.gazzetta.gr/");
-    const $ = cheerio.load(html);
+    const $ = await getRSS("https://www.gazzetta.gr/rss");
 
     const articles = [];
 
-    $("h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
+    $("item").each((_, el) => {
+      const title = clean($(el).find("title").text());
+      const link = $(el).find("link").text();
 
-      if (!title || !link) return;
-      if (!link.startsWith("http")) link = "https://www.gazzetta.gr" + link;
-
-      articles.push({ title, link, source: "Gazzetta" });
+      articles.push({
+        title,
+        link,
+        source: "Gazzetta",
+        pubDate: new Date()
+      });
     });
 
     console.log("Gazzetta:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("Gazzetta ERROR", e.message);
     return [];
   }
 };
 
-// 6️⃣ TO10
+// 🔥 TO10 (RSS)
 const scrapeTo10 = async () => {
   try {
-    const html = await getHTML("https://www.to10.gr/");
-    const $ = cheerio.load(html);
+    const $ = await getRSS("https://www.to10.gr/feed/");
 
     const articles = [];
 
-    $("h2 a, h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
+    $("item").each((_, el) => {
+      const title = clean($(el).find("title").text());
+      const link = $(el).find("link").text();
 
-      if (!title || !link) return;
-
-      articles.push({ title, link, source: "To10" });
+      articles.push({
+        title,
+        link,
+        source: "To10",
+        pubDate: new Date()
+      });
     });
 
     console.log("To10:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("To10 ERROR", e.message);
     return [];
   }
 };
 
-// 7️⃣ SPORTDAY
+// 🔥 SPORTDAY (RSS)
 const scrapeSportday = async () => {
   try {
-    const html = await getHTML("https://sportday.gr/");
-    const $ = cheerio.load(html);
+    const $ = await getRSS("https://sportday.gr/feed/");
 
     const articles = [];
 
-    $("h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
+    $("item").each((_, el) => {
+      const title = clean($(el).find("title").text());
+      const link = $(el).find("link").text();
 
-      if (!title || !link) return;
-      if (!link.startsWith("http")) link = "https://sportday.gr" + link;
-
-      articles.push({ title, link, source: "Sportday" });
+      articles.push({
+        title,
+        link,
+        source: "Sportday",
+        pubDate: new Date()
+      });
     });
 
     console.log("Sportday:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("Sportday ERROR", e.message);
     return [];
   }
 };
 
-// 8️⃣ NOVASPORTS
+// 🔥 NOVASPORTS (RSS)
 const scrapeNovasports = async () => {
   try {
-    const html = await getHTML("https://www.novasports.gr/");
-    const $ = cheerio.load(html);
+    const $ = await getRSS("https://www.novasports.gr/feed/");
 
     const articles = [];
 
-    $("h3 a").each((_, el) => {
-      const title = clean($(el).text());
-      let link = $(el).attr("href");
+    $("item").each((_, el) => {
+      const title = clean($(el).find("title").text());
+      const link = $(el).find("link").text();
 
-      if (!title || !link) return;
-      if (!link.startsWith("http")) link = "https://www.novasports.gr" + link;
-
-      articles.push({ title, link, source: "Novasports" });
+      articles.push({
+        title,
+        link,
+        source: "Novasports",
+        pubDate: new Date()
+      });
     });
 
     console.log("Novasports:", articles.length);
     return articles;
+
   } catch (e) {
     console.log("Novasports ERROR", e.message);
     return [];
@@ -242,6 +286,7 @@ const scrapeNovasports = async () => {
 // ================= ROUTE =================
 app.get("/articles", async (req, res) => {
   try {
+
     const results = await Promise.all([
       scrapeSport24(),
       scrapeAthletiko(),
