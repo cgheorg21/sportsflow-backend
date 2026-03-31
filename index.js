@@ -23,6 +23,26 @@ const ArticleSchema = new mongoose.Schema({
   source: String,
   pubDate: Date
 });
+//==============TEAM KEYWORDS==================
+const teamKeywords = {
+  "ΟΛΥΜΠΙΑΚΟΣ": ["ολυμπιακ", "osfp", "πειραιας", "ερυθρολευκοι", "θρυλος", "λιμανι", "δαφνοστεφανωμενος"],
+  "ΠΑΝΑΘΗΝΑΙΚΟΣ": ["παναθην", "παο", "τριφυλλι", "αθηνα", "λεωφορος", "πρασινοι", "pao"],
+  "ΑΕΚ": ["αεκ", "ενωση", "δικεφαλος", "προσφυγια", "νεα φιλαδελφεια", "κιτρινομαυροι"],
+  "ΠΑΟΚ": ["παοκ", "τουμπα", "δικεφαλος του βορρα", "ασπρομαυροι", "θυρα 4"],
+  "ΑΡΗΣ": ["αρη", "θεος του πολεμου", "κλεανθης βικελιδης", "κιτρινοι", "super 3"],
+  "ΟΦΗ": ["οφη", "κρητη", "ηρακλειο", "γεντι κουλε", "ομιλητες"],
+  "ΒΟΛΟΣ": ["βολο", "μαγνησια", "πανθεσσαλικο", "κυανερυθροι", "νεα ομαδα"],
+  "ΑΤΡΟΜΗΤΟΣ": ["ατρομη", "περιστερι", "αστερι", "κυανολευκοι", "δυτικα προαστια", "fentagin"],
+  "ΠΑΝΑΙΤΩΛΙΚΟΣ": ["παναιτωλ", "αγρινιο", "τιτορμος", "κιτρινομπλε", "καναρινια", "αιτωλοακαρνανικη"],
+  "ΑΣΤΕΡΑΣ": ["αστερα", "αρκαδια", "θεοδωρος κολοκοτρωνης", "κυανοκιτρινοι", "πελοποννησος"],
+  "ΠΑΝΣΕΡΑΙΚΟΣ": ["πανσερ", "σερρες", "λιονταρια", "κοκκινοι", "δημοτικο γηπεδο"],
+  "ΑΕΛ": ["αελ", "βασιλισσα του καμπου", "αλογακι", "θεσσαλια", "βυσσινι", "πρωταθλημα 1988"],
+  "ΚΑΛΑΜΑΤΑ": ["καλαματ", "μαυρη θυελλα", "μεσσηνια", "παραλια", "μαυροασπροι"],
+  "ΛΕΒΑΔΕΙΑΚΟΣ": ["λεβαδ", "λιβαδεια", "βοιωτια", "κομποτης", "στερεα ελλαδα"],
+  "ΚΗΦΙΣΙΑ": ["κηφισ", "βορεια προαστια", "ζηρινειο", "νεοφωτιστοι", "μπλε-ασπρο", "ανοδος"],
+  "ΗΡΑΚΛΗΣ": ["ηρακλ", "γηραιος", "καυτατζογλειο", "κυανολευκοι", "αυτονομη θυρα 10", "ιστορια"]
+};
+
 
 const Article = mongoose.model("Article", ArticleSchema);
 
@@ -54,6 +74,44 @@ const extractImage = (item) => {
     ""
   );
 };
+
+const detectTeam = (title) => {
+  const t = title.toLowerCase();
+
+  for (let team in teamKeywords) {
+    if (teamKeywords[team].some(k => t.includes(k))) {
+      return team;
+    }
+  }
+
+  return null;
+};
+
+const detectSport = (title, link) => {
+  const t = (title + " " + link).toLowerCase();
+
+  if (t.includes("basket") || t.includes("nba") || t.includes("euroleague")) {
+    return "BASKET";
+  }
+
+  return "FOOTBALL";
+};
+
+const buildCategories = (article) => {
+
+  const categories = ["NEWS"];
+
+  const sport = detectSport(article.title, article.link);
+  categories.push(sport);
+
+  const team = detectTeam(article.title);
+  if (team) categories.push(team);
+
+  if (article.source) categories.push(article.source);
+
+  return categories;
+};
+
 // ================= SCRAPERS =================
 
 // ✅ SPORT24 (SCRAPER)
@@ -264,7 +322,10 @@ app.get("/articles", async (req, res) => {
       scrapeNovasports()
     ]);
 
-    const all = dedupe(results.flat());
+    const all = dedupe(results.flat()).map(a => ({
+      ...a,
+      categories: buildCategories(a)
+    }));
     console.log("TOTAL:", all.length);
     res.json(all);
 
