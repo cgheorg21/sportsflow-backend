@@ -63,11 +63,17 @@ const scrapeSport24 = async () => {
         link = "https://www.sport24.gr" + link;
       }
 
+      let image =
+      $(el).find("img").attr("src") ||
+      $(el).find("img").attr("data-src") ||
+      $(el).find("img").attr("data-lazy-src");
+
       articles.push({
-        title,
-        link,
-        source: "Sport24",
-        pubDate: new Date()
+      title,
+      link,
+      image,
+      source: "Sport24",
+      pubDate: new Date()
       });
     });
 
@@ -98,11 +104,17 @@ const scrapeAthletiko = async () => {
         link = "https://www.athletiko.gr" + link;
       }
 
+      let image =
+      $(el).find("img").attr("src") ||
+      $(el).find("img").attr("data-src") ||
+      $(el).find("img").attr("srcset")?.split(" ")[0];
+
       articles.push({
-        title,
-        link,
-        source: "Athletiko",
-        pubDate: new Date()
+      title,
+      link,
+      image,
+      source: "Athletiko",
+      pubDate: new Date()
       });
     });
 
@@ -115,85 +127,21 @@ const scrapeAthletiko = async () => {
   }
 };
 
-// 🔥 SDNA (RSS)
-const scrapeSDNA = async () => {
-  try {
-
-    const urls = [
-      "https://www.sdna.gr/news",
-      "https://www.sdna.gr/podosfairo",
-      "https://www.sdna.gr/mpasket"
-    ];
-
-    let articles = [];
-
-    for (const url of urls) {
-
-      const { data } = await axios.get(url, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-          "Accept-Language": "el-GR,el;q=0.9,en;q=0.8",
-          "Accept":
-            "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-          "Referer": "https://www.google.com/"
-        },
-        timeout: 10000
-      });
-
-      const $ = cheerio.load(data);
-
-      $("article").each((_, el) => {
-
-        let title = $(el).find("h2, h3").first().text().trim();
-
-        let link =
-          $(el).find("a").attr("href") ||
-          $(el).find("a").first().attr("href");
-
-        let image =
-          $(el).find("img").attr("src") ||
-          $(el).find("img").attr("data-src") ||
-          $(el).find("img").attr("data-original");
-
-        if (!title || !link) return;
-
-        if (!link.startsWith("http")) {
-          link = "https://www.sdna.gr" + link;
-        }
-
-        articles.push({
-          title,
-          link,
-          image,
-          source: "SDNA",
-          pubDate: new Date()
-        });
-      });
-
-    }
-
-    console.log("SDNA:", articles.length);
-
-    return articles;
-
-  } catch (err) {
-    console.log("SDNA ERROR:", err.message);
-    return [];
-  }
-};
-
 // 🔥 ONSPORTS (RSS)
 const scrapeOnsports = async () => {
   try {
     const feed = await parser.parseURL("https://www.onsports.gr/latest-news?format=feed");
 
     const articles = feed.items.map(item => ({
-      title: item.title,
-      link: item.link,
-      source: "Onsports",
-      pubDate: item.pubDate || new Date()
+    title: item.title,
+    link: item.link,
+    image:
+      item.enclosure?.url ||
+      item.enclosure?.link ||
+      (item.content?.match(/<img.*?src="(.*?)"/)?.[1]) ||
+      "",
+    source: "Onsports",
+    pubDate: item.pubDate || new Date()
     }));
 
     console.log("Onsports:", articles.length);
@@ -213,6 +161,10 @@ const scrapeGazzetta = async () => {
     const articles = feed.items.map(item => ({
       title: item.title,
       link: item.link,
+      image:
+        item.enclosure?.url ||
+        (item.content?.match(/<img.*?src="(.*?)"/)?.[1]) ||
+        "",
       source: "Gazzetta",
       pubDate: item.pubDate || new Date()
     }));
@@ -235,6 +187,7 @@ const scrapeTo10 = async () => {
       title: item.title,
       link: item.link,
       source: "To10",
+      image: item.enclosure?.url || item.enclosure?.link || "",
       pubDate: item.pubDate || new Date()
     }));
 
@@ -255,6 +208,7 @@ const scrapeSportday = async () => {
       title: item.title,
       link: item.link,
       source: "Sportday",
+      image: item.enclosure?.url || "",
       pubDate: item.pubDate || new Date()
     }));
 
@@ -275,6 +229,7 @@ const scrapeNovasports = async () => {
       title: item.title,
       link: item.link,
       source: "Novasports",
+      image: item.enclosure?.url || "",
       pubDate: item.pubDate || new Date()
     }));
 
@@ -305,7 +260,6 @@ app.get("/articles", async (req, res) => {
     const results = await Promise.all([
       scrapeSport24(),
       scrapeAthletiko(),
-      scrapeSDNA(),
       scrapeOnsports(),
       scrapeGazzetta(),
       scrapeTo10(),
